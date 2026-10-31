@@ -1,0 +1,23 @@
+{
+  "command": "pytest -q strategy-modules/3d862326/test_acceptance.py",
+  "summary": "3 passed, 1 failed, 0 skipped",
+  "exit_code": 1,
+  "cases": [
+    {
+      "chart_id": "clmvwb7pfxe",
+      "mark_id": "mkmvwb7pfwd",
+      "symbol": "COLPAL",
+      "interval": "5",
+      "at": 1793331900,
+      "expected": "must_match",
+      "passed": false,
+      "matched": false,
+      "condition_values": {
+        "data_available": false,
+        "error": "Error HTTPConnectionPool(host='host.docker.internal', port=8123): Max retries exceeded with url: /? (Caused by NameResolutionError(\"<urllib3.connection.HTTPConnection object at 0x[redacted]>: Failed to resolve 'host.docker.internal' ([Errno -5] No address associated with hostname)\")) executing HTTP request attempt 1 (http://host.docker.internal:8123)",
+        "error_type": "OperationalError"
+      },
+      "matched_rows": []
+    }
+  ]
+}
