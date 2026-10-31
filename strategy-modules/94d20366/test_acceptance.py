@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from main import run_scan, scan
+from main import _truth, run_scan, scan
 
 
 FIXTURE_PATH = (
@@ -23,12 +23,77 @@ IST = ZoneInfo(FIXTURE["timezone"])
 RESULTS = []
 
 
+def test_truth_matches_previous_to_current_supertrend_cross():
+    matches, conditions = _truth(
+        {
+            "high": 1628.0,
+            "close": 1598.3,
+            "sma20": 1622.08,
+            "sma50": 1616.11,
+            "sma200": 1608.22,
+            "superTrend": 1633.32,
+            "previous_close": 1630.1,
+            "previous_superTrend": 1623.36,
+        }
+    )
+
+    assert matches
+    assert conditions["data_available"] is True
+    assert conditions["high_above_previous_superTrend"] is True
+    assert conditions["previous_close_above_previous_superTrend"] is True
+    assert conditions["all_conditions"] is True
+
+
+def test_truth_rejects_missing_previous_candle_data():
+    matches, conditions = _truth(
+        {
+            "high": 1628.0,
+            "close": 1598.3,
+            "sma20": 1622.08,
+            "sma50": 1616.11,
+            "sma200": 1608.22,
+            "superTrend": 1633.32,
+            "previous_close": None,
+            "previous_superTrend": None,
+        }
+    )
+
+    assert not matches
+    assert conditions["data_available"] is False
+    assert conditions["all_conditions"] is False
+
+
+def test_truth_rejects_previous_supertrend_above_previous_close():
+    matches, conditions = _truth(
+        {
+            "high": 1628.0,
+            "close": 1598.3,
+            "sma20": 1622.08,
+            "sma50": 1616.11,
+            "sma200": 1608.22,
+            "superTrend": 1633.32,
+            "previous_close": 1620.0,
+            "previous_superTrend": 1623.36,
+        }
+    )
+
+    assert not matches
+    assert conditions["previous_close_above_previous_superTrend"] is False
+    assert conditions["all_conditions"] is False
+
+
 @pytest.mark.parametrize(
     "case",
     CASES,
     ids=[f"{case['chart_id']}-{case['mark_id']}" for case in CASES],
 )
-def test_chart_acceptance(case):
+def test_chart_acceptance(case, monkeypatch):
+    monkeypatch.setenv(
+        "CLICKHOUSE_HOST", os.getenv("CLICKHOUSE_HOST", "localhost")
+    )
+    monkeypatch.setenv(
+        "CLICKHOUSE_PASSWORD", os.getenv("CLICKHOUSE_PASSWORD", "acceptance")
+    )
     at = datetime.fromtimestamp(case["at"], IST)
     target_time = at.strftime("%Y-%m-%dT%H:%M:%S")
     diagnostics = []
@@ -150,7 +215,10 @@ def write_acceptance_report(request):
     report_path.write_text(
         json.dumps(
             {
-                "command": "pytest -q strategy-modules/94d20366/test_acceptance.py",
+                "command": (
+                    "CLICKHOUSE_HOST=localhost CLICKHOUSE_PASSWORD=acceptance "
+                    "pytest -q strategy-modules/94d20366/test_acceptance.py"
+                ),
                 "summary": summary,
                 "exit_code": int(bool(failed or skipped)),
                 "cases": RESULTS,
