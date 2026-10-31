@@ -89,8 +89,6 @@ def _parse_as_of(value: str | datetime | None) -> datetime:
 
 def _as_date(value: Any) -> date:
     if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            return value.astimezone(IST).date()
         return value.date()
     if isinstance(value, date):
         return value
@@ -98,13 +96,10 @@ def _as_date(value: Any) -> date:
 
 
 def _timestamp_ist(value: Any) -> str:
+    """Database dates store IST wall-clock values, including driver-annotated datetimes."""
     if isinstance(value, datetime):
-        if value.tzinfo is not None:
-            value = value.astimezone(IST)
         return value.strftime("%Y-%m-%dT%H:%M:%S")
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(IST)
     return parsed.strftime("%Y-%m-%dT%H:%M:%S")
 
 
@@ -196,16 +191,16 @@ def run_scan(
                 )
 
         date_result = client.query(
-            "SELECT DISTINCT toDate(toTimeZone(date, 'Asia/Kolkata')) AS trading_date "
+            "SELECT DISTINCT toDate(date) AS trading_date "
             "FROM stock__candles_data "
             "WHERE interval = {interval:String} "
             "AND stock IN {symbols:Array(String)} "
-            "AND date <= {as_of:DateTime} "
+            "AND date <= toDateTime({as_of:String}) "
             "ORDER BY trading_date DESC",
             parameters={
                 "interval": interval,
                 "symbols": universe_symbols,
-                "as_of": as_of,
+                "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
         trading_dates = [_as_date(row[0]) for row in date_result.result_rows]
@@ -262,16 +257,16 @@ def run_scan(
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
                 "AND stock IN {symbols:Array(String)} "
-                "AND date >= {day_start:DateTime} AND date < {day_end:DateTime} "
-                "AND date <= {as_of:DateTime} "
-                "AND formatDateTime(toTimeZone(date, 'Asia/Kolkata'), '%H:%M:%S') = {candle_time:String} "
+                "AND date >= toDateTime({day_start:String}) AND date < toDateTime({day_end:String}) "
+                "AND date <= toDateTime({as_of:String}) "
+                "AND formatDateTime(date, '%H:%M:%S') = {candle_time:String} "
                 "ORDER BY stock",
                 parameters={
                     "interval": interval,
                     "symbols": universe_symbols,
-                    "day_start": day_start,
-                    "day_end": day_end,
-                    "as_of": as_of,
+                    "day_start": day_start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "day_end": day_end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "as_of": as_of.strftime("%Y-%m-%d %H:%M:%S"),
                     "candle_time": FIRST_CANDLE_TIME.strftime("%H:%M:%S"),
                 },
             )
