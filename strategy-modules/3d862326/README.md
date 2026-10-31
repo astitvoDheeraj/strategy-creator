@@ -4,3 +4,8 @@ This module scans the active NIFTY 200 members for the first 5-minute candle of 
 ## Confirmed repair
 
 Candle filtering preserves the database IST wall-clock timestamps. All same-candle SMA/SuperTrend comparisons are unchanged. The user removed COLPAL as a required positive; the fixture now checks that this candle is excluded. This supersedes its original positive-example expectation.
+
+
+## Confirmed repair
+
+Candle filtering preserves the database IST wall-clock timestamps. All same-candle SMA/SuperTrend comparisons are unchanged. The user removed COLPAL as a required positive; the fixture now checks that this candle is excluded. This supersedes its original positive-example expectation.

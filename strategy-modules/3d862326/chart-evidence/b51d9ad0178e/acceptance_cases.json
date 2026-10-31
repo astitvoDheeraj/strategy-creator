@@ -171,7 +171,7 @@
           "to": 1793331900,
           "from_label": "2026-10-30 09:15",
           "to_label": "",
-          "note": " User confirmed same-candle SuperTrend comparison; COLPAL is not a required positive and must be excluded under this rule.",
+          "note": "User confirmed same-candle SuperTrend comparison; COLPAL is not a required positive and must be excluded under this rule.",
           "ai_analysis": "### Screener Prompt\n\nScreen NIFTY 200 on the first completed 5-minute candle of each trading day at 9:15 AM for the following generic setup. After filtering for stocks that meet the indicator conditions, assess liquidity and volatility based on the last 10 days:\n\n1. **Candle Body Positioning**: \n   - `open(t0) > SMA20(t0)` AND `close(t0) < SMA20(t0)`\n   - `open(t0) > SMA50(t0)` AND `close(t0) < SMA50(t0)`\n   - `open(t0) > SMA200(t0)` AND `close(t0) < SMA200(t0)`\n   - `open(t0) > ST(t0)` AND `close(t0) < ST(t0)`\n\n2. **Price and Indicator Crossings**:\n   - The candle closes below the Supertrend line at `t0`: `close(t0) < ST(t0)`\n\n3. **Volume Comparison**:\n   - `volume(t0) > volume(t-1)`\n\n### Signal Reasoning\n\nThe relationships identify the setup by demonstrating a bearish trend where the first completed candle of the day (`t0`) opens above key moving averages (SMA20, SMA50, SMA200) and the Supertrend line but closes below all these indicators, indicating a strong downward momentum. The volume condition supports this by showing increased activity compared to the previous candle, suggesting heightened selling interest. The combination of these factors indicates a potential continuation of the bearish trend.\n\n### Needs Confirmation\n\n- The specific thresholds for \"increased volume\" need confirmation. What constitutes a significant increase in volume compared to the previous candle?\n- The exact behavior of the Supertrend line during the signal candle needs confirmation to ensure it is indeed below the closing price.\n- The method for determining the most liquid and volatile stock after filtering based on the indicator conditions needs confirmation.\n\n### Sample Reference (Not a Screening Filter)\n\nSymbol: COLPAL  \nMark ID: mkmvwb7pfwd  \nRole: signal  \nChart timeframe: 5-minute  \nMarked candle OPEN time: 2026-10-30 09:15 IST",
           "candles": [
             {
@@ -202,7 +202,7 @@
       "at_iso": "2026-10-30T09:15",
       "from_label": "2026-10-30 09:15",
       "expect": "must_not_match",
-      "note": " User confirmed same-candle SuperTrend comparison; COLPAL is not a required positive and must be excluded under this rule.",
+      "note": "User confirmed same-candle SuperTrend comparison; COLPAL is not a required positive and must be excluded under this rule.",
       "candles": [
         {
           "t": 1793331900,

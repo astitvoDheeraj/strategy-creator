@@ -259,7 +259,7 @@ def run_scan(
                 "AND stock IN {symbols:Array(String)} "
                 "AND date >= toDateTime({day_start:String}) AND date < toDateTime({day_end:String}) "
                 "AND date <= toDateTime({as_of:String}) "
-                "AND formatDateTime(date, '%H:%M:%S') = {candle_time:String} "
+                "AND formatDateTime(date, '%H:%i:%S') = {candle_time:String} "
                 "ORDER BY stock",
                 parameters={
                     "interval": interval,
