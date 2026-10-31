@@ -36,6 +36,12 @@ PRESENTATION = {
 router = APIRouter(prefix=f"/strategy-api/{JOB_ID}")
 
 
+class ScanParameterError(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_message = message
+
+
 def _client():
     return clickhouse_connect.get_client(
         host=os.getenv("CLICKHOUSE_HOST", "host.docker.internal"),
@@ -54,9 +60,11 @@ def _parse_date(value: str | None, name: str) -> date | None:
     try:
         parsed = date.fromisoformat(value)
     except ValueError as exc:
-        raise ValueError(f"{name} must be a date in YYYY-MM-DD format") from exc
+        raise ScanParameterError(
+            f"{name} must be a date in YYYY-MM-DD format"
+        ) from exc
     if parsed.isoformat() != value:
-        raise ValueError(f"{name} must be a date in YYYY-MM-DD format")
+        raise ScanParameterError(f"{name} must be a date in YYYY-MM-DD format")
     return parsed
 
 
@@ -69,7 +77,9 @@ def _parse_as_of(value: str | datetime | None) -> datetime:
         try:
             parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M")
         except ValueError as exc:
-            raise ValueError("as_of must use YYYY-MM-DDTHH:MM format in IST") from exc
+            raise ScanParameterError(
+                "as_of must use YYYY-MM-DDTHH:MM format in IST"
+            ) from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=IST)
     else:
@@ -146,7 +156,7 @@ def run_scan(
     """Run the screener and return the user-facing result rows."""
     interval = str(params.get("interval") or DEFAULT_INTERVAL)
     if not interval:
-        raise ValueError("interval must not be empty")
+        raise ScanParameterError("interval must not be empty")
     as_of = _parse_as_of(params.get("as_of"))
     requested_symbols = params.get("symbols")
     if isinstance(requested_symbols, str):
@@ -156,15 +166,15 @@ def run_scan(
     elif requested_symbols is not None:
         requested_symbols = [str(symbol).strip() for symbol in requested_symbols]
     if requested_symbols is not None and not requested_symbols:
-        raise ValueError("symbols must contain at least one symbol")
+        raise ScanParameterError("symbols must contain at least one symbol")
 
     from_date = _parse_date(params.get("from_date"), "from_date")
     to_date = _parse_date(params.get("to_date"), "to_date")
     if from_date is not None and to_date is not None:
         if from_date > to_date:
-            raise ValueError("from_date must be on or before to_date")
+            raise ScanParameterError("from_date must be on or before to_date")
         if (to_date - from_date).days + 1 > MAX_DAYS:
-            raise ValueError("date range must not exceed 90 calendar days")
+            raise ScanParameterError("date range must not exceed 90 calendar days")
 
     client = _client()
     try:
@@ -174,14 +184,16 @@ def run_scan(
         )
         universe_symbols = [str(row[0]) for row in universe_result.result_rows]
         if not universe_symbols:
-            raise ValueError("The nifty_200 universe has no active members")
+            raise ScanParameterError("The nifty_200 universe has no active members")
         if requested_symbols is not None:
             requested = set(requested_symbols)
             universe_symbols = [
                 symbol for symbol in universe_symbols if symbol in requested
             ]
             if not universe_symbols:
-                raise ValueError("No requested symbols are active members of nifty_200")
+                raise ScanParameterError(
+                    "No requested symbols are active members of nifty_200"
+                )
 
         date_result = client.query(
             "SELECT DISTINCT toDate(toTimeZone(date, 'Asia/Kolkata')) AS trading_date "
@@ -198,7 +210,9 @@ def run_scan(
         )
         trading_dates = [_as_date(row[0]) for row in date_result.result_rows]
         if not trading_dates:
-            raise ValueError("No candle dates found for the selected universe and as_of")
+            raise ScanParameterError(
+                "No candle dates found for the selected universe and as_of"
+            )
         latest_date = trading_dates[0]
         earliest_date = trading_dates[-1]
 
@@ -211,9 +225,9 @@ def run_scan(
             else:
                 from_date = sessions_through_end[min(DEFAULT_DAYS, len(sessions_through_end)) - 1]
         if from_date > to_date:
-            raise ValueError("from_date must be on or before to_date")
+            raise ScanParameterError("from_date must be on or before to_date")
         if (to_date - from_date).days + 1 > MAX_DAYS:
-            raise ValueError("date range must not exceed 90 calendar days")
+            raise ScanParameterError("date range must not exceed 90 calendar days")
 
         applied_dates = [
             day for day in trading_dates if from_date <= day <= to_date
@@ -224,13 +238,18 @@ def run_scan(
         sort_by = str(params.get("sort_by") or "date")
         allowed_sort_keys = {column["key"] for column in COLUMNS}
         if sort_by not in allowed_sort_keys:
-            raise ValueError(f"sort_by must be one of {', '.join(sorted(allowed_sort_keys))}")
+            raise ScanParameterError(
+                f"sort_by must be one of {', '.join(sorted(allowed_sort_keys))}"
+            )
         sort_dir = str(params.get("sort_dir") or "asc").lower()
         if sort_dir not in {"asc", "desc"}:
-            raise ValueError("sort_dir must be 'asc' or 'desc'")
-        limit = int(params.get("limit", 0))
+            raise ScanParameterError("sort_dir must be 'asc' or 'desc'")
+        try:
+            limit = int(params.get("limit", 0))
+        except (TypeError, ValueError) as exc:
+            raise ScanParameterError("limit must be an integer") from exc
         if limit < 0:
-            raise ValueError("limit must be zero or a positive integer")
+            raise ScanParameterError("limit must be zero or a positive integer")
 
         matches_by_date: dict[date, list[dict[str, Any]]] = {}
         total = 0
@@ -364,9 +383,10 @@ def scan(
     try:
         date_range = {}
         matches = run_scan(params, metadata=date_range)
-    except ValueError as exc:
+    except ScanParameterError as exc:
         return JSONResponse(
-            status_code=400, content={"success": False, "error": str(exc)}
+            status_code=400,
+            content={"success": False, "error": exc.public_message},
         )
     return {
         "success": True,
