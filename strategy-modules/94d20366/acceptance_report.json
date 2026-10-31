@@ -1,0 +1,23 @@
+{
+  "command": "pytest -q strategy-modules/94d20366/test_acceptance.py",
+  "summary": "3 passed, 1 failed, 0 skipped",
+  "exit_code": 1,
+  "cases": [
+    {
+      "chart_id": "clmvwb7pfxe",
+      "mark_id": "mkmvwb7pfwd",
+      "symbol": "COLPAL",
+      "interval": "5",
+      "at": 1793331900,
+      "expected": "must_match",
+      "passed": false,
+      "matched": false,
+      "condition_values": {
+        "data_available": false,
+        "error_type": "OperationalError",
+        "error": "Scan failed before measurements were available"
+      },
+      "matched_rows": []
+    }
+  ]
+}
