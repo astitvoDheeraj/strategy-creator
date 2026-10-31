@@ -14,7 +14,7 @@
       "matched": false,
       "condition_values": {
         "data_available": false,
-        "error_type": "OperationalError",
+        "error_type": "DatabaseError",
         "error": "Scan failed before measurements were available"
       },
       "matched_rows": []
