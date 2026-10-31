@@ -1,0 +1,39 @@
+# Managed by BullsPlace (Integration page): reinstalled when it differs, so edit it there, not here.
+# Runs before every Copilot cloud agent session (setup steps are not behind the agent firewall) and starts
+# a throwaway local ClickHouse; acceptance tests load the real data snapshot committed under
+# strategy-modules/<job>/chart-evidence/<batch>/clickhouse/ with load.py.
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+  pull_request:
+    paths: [.github/workflows/copilot-setup-steps.yml]
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install screener test dependencies
+        run: pip install "clickhouse-connect>=0.8" pytest fastapi uvicorn httpx
+
+      - name: Start local ClickHouse for acceptance replay
+        run: |
+          docker run -d --name acceptance-clickhouse -p 8123:8123 -p 9000:9000 \
+            -e CLICKHOUSE_DB=default -e CLICKHOUSE_USER=default -e CLICKHOUSE_PASSWORD=acceptance \
+            -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
+            --ulimit nofile=262144:262144 clickhouse/clickhouse-server:latest
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8123/ping && break
+            sleep 2
+          done
+          curl -sf -u default:acceptance "http://localhost:8123/?query=SELECT%20version()"
