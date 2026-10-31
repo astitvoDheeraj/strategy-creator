@@ -116,30 +116,38 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     available = high is not None and close is not None and all(
         value is not None for value in indicators.values()
     )
+    previous_close = row.get("previous_close")
     previous_supertrend = row.get("previous_superTrend")
     conditions = {
         "high_above_sma20": available and high > indicators["sma20"],
         "high_above_sma50": available and high > indicators["sma50"],
         "high_above_sma200": available and high > indicators["sma200"],
-        "high_above_superTrend": available and high > indicators["superTrend"],
+        "high_above_previous_superTrend": (
+            high is not None
+            and previous_supertrend is not None
+            and high > previous_supertrend
+        ),
         "close_below_sma20": available and close < indicators["sma20"],
         "close_below_sma50": available and close < indicators["sma50"],
         "close_below_sma200": available and close < indicators["sma200"],
         "close_below_superTrend": available and close < indicators["superTrend"],
-        "previous_superTrend_below_close": (
+        "previous_close_above_previous_superTrend": (
             previous_supertrend is not None
-            and close is not None
-            and previous_supertrend < close
+            and previous_close is not None
+            and previous_close > previous_supertrend
         ),
         "current_superTrend_above_close": (
             available and indicators["superTrend"] > close
         ),
     }
     measured = {
-        "data_available": available and previous_supertrend is not None,
+        "data_available": (
+            available and previous_close is not None and previous_supertrend is not None
+        ),
         "high": high,
         "close": close,
         **indicators,
+        "previous_close": previous_close,
         "previous_superTrend": previous_supertrend,
         **conditions,
         "all_conditions": all(conditions.values()),
@@ -257,7 +265,7 @@ def run_scan(
             candle_result = client.query(
                 "SELECT stock, date, high, close, volume, vma20, "
                 "sma20, sma50, sma200, superTrend "
-                "FROM stock__candles_data FINAL "
+                "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
                 "AND stock IN {symbols:Array(String)} "
                 "AND date >= toDateTime({day_start:String}) "
@@ -298,7 +306,7 @@ def run_scan(
             previous_values: dict[str, Any] = {}
             if target_symbols:
                 previous_result = client.query(
-                    "SELECT stock, tupleElement(argMax(tuple(superTrend), date), 1) "
+                    "SELECT stock, argMax(tuple(close, superTrend), date) "
                     "FROM stock__candles_data "
                     "WHERE interval = {interval:String} "
                     "AND stock IN {symbols:Array(String)} "
@@ -313,12 +321,15 @@ def run_scan(
                     },
                 )
                 previous_values = {
-                    str(stock): value for stock, value in previous_result.result_rows
+                    str(stock): values
+                    for stock, values in previous_result.result_rows
                 }
 
             day_matches = []
             for raw in raw_rows:
-                raw["previous_superTrend"] = previous_values.get(str(raw["stock"]))
+                previous = previous_values.get(str(raw["stock"]))
+                raw["previous_close"] = previous[0] if previous is not None else None
+                raw["previous_superTrend"] = previous[1] if previous is not None else None
                 matches, condition_values = _truth(raw)
                 normalized_date = _timestamp_ist(raw["date"])
                 if diagnostics is not None:
@@ -379,9 +390,9 @@ def run_scan(
                     "as_of": applied_as_of,
                     "criteria": (
                         "NIFTY 200 stocks; first 5-minute candle at 09:15 IST; "
-                        "high above and close below SMA20, SMA50, SMA200 and "
-                        "SuperTrend, with previous SuperTrend below close and "
-                        "current SuperTrend above close; "
+                        "high above SMA20, SMA50, SMA200 and the previous "
+                        "SuperTrend, with the previous close above its SuperTrend "
+                        "and current SuperTrend above close; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
                     ),
