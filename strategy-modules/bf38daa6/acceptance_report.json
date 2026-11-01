@@ -1,0 +1,28 @@
+{
+  "command": "python -m pytest -vv test_acceptance.py",
+  "summary": "8 passed, 1 failed, 0 skipped",
+  "exit_code": 1,
+  "cases": [
+    {
+      "chart_id": "clmvy2mgia7d",
+      "mark_id": "mkmvy2kv19z",
+      "symbol": "RELIANCE",
+      "interval": "weekly",
+      "at": 1756146600,
+      "expected": "must_match",
+      "passed": false,
+      "matched": false,
+      "condition_values": {
+        "data_available": true,
+        "close": 1353.9,
+        "low": 1340.6,
+        "superTrend": 1340.2024491342604,
+        "close_above_superTrend": true,
+        "low_at_or_below_superTrend": false,
+        "all_conditions": false,
+        "direction": "NEUTRAL"
+      },
+      "matched_rows": []
+    }
+  ]
+}
