@@ -17,6 +17,7 @@ MAX_DAYS = 90
 DEFAULT_LIQUIDITY_DAYS = 10
 COLUMNS = [
     {"key": "stock", "label": "Symbol", "format": "text"},
+    {"key": "direction", "label": "Direction", "format": "direction"},
     {"key": "scan_date", "label": "Date", "format": "date"},
     {"key": "close", "label": "Last price (LTP)", "format": "price"},
     {"key": "volume", "label": "Volume", "format": "int"},
@@ -36,6 +37,18 @@ COLUMNS = [
         },
     },
 ]
+DIRECTION = {
+    "enabled": True,
+    "buy": (
+        "SuperTrend is below the signal candle close and close is strictly above "
+        "SMA20, SMA50, and SMA200"
+    ),
+    "sell": (
+        "SuperTrend is above the signal candle close and close is strictly below "
+        "SMA20, SMA50, and SMA200"
+    ),
+    "neutral": "Neither BUY nor SELL rule holds",
+}
 PRESENTATION = {
     "style": "table",
     "sort": {"key": "volume", "direction": "desc"},
@@ -198,6 +211,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "short_signal": short_signal,
         "long_signal": long_signal,
         "signal": signal,
+        "direction": {"LONG": "BUY", "SHORT": "SELL"}.get(signal, "NEUTRAL"),
         "all_conditions": matched,
     }
     return matched, measured
@@ -436,6 +450,7 @@ def run_scan(
                     day_matches.append(
                         {
                             "stock": str(raw["stock"]),
+                            "direction": condition_values["direction"],
                             "interval": interval,
                             "scan_date": normalized_date[:10],
                             "close": raw["close"],
@@ -535,6 +550,7 @@ def scan(
         "success": True,
         "criteria": date_range["criteria"],
         "columns": COLUMNS,
+        "direction": DIRECTION,
         "presentation": PRESENTATION,
         "parameters": [
             {
