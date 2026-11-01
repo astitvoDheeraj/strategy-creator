@@ -56,6 +56,36 @@ def test_signal_requires_strict_supertrend_and_moving_average_relationships():
     assert main._truth(candle(sma20=None))[1]["signal"] is None
 
 
+@pytest.mark.parametrize(
+    "overrides,direction",
+    [
+        ({}, "SELL"),
+        ({"open": 90.0, "close": 110.0}, "BUY"),
+        ({"superTrend": 89.0}, "NEUTRAL"),
+        ({"close": 110.0, "superTrend": 111.0}, "NEUTRAL"),
+        ({"close": None}, "NEUTRAL"),
+    ],
+)
+def test_direction_uses_signal_candle_indicators(overrides, direction):
+    assert main._truth(candle(**overrides))[1]["direction"] == direction
+
+
+@pytest.mark.parametrize("indicator", ["superTrend", "sma20", "sma50", "sma200"])
+@pytest.mark.parametrize("close", [90.0, 110.0])
+@pytest.mark.parametrize("relationship", ["equal", "missing", "wrong_side"])
+def test_direction_is_neutral_for_incomplete_or_mixed_indicators(
+    indicator, close, relationship
+):
+    value = {
+        "equal": close,
+        "missing": None,
+        "wrong_side": close - 1 if close == 90.0 else close + 1,
+    }[relationship]
+    row = candle(close=close)
+    row[indicator] = value
+    assert main._truth(row)[1]["direction"] == "NEUTRAL"
+
+
 @pytest.mark.parametrize("close,open_price", [(90.0, 105.0), (110.0, 90.0)])
 @pytest.mark.parametrize("relationship", ["equal", "wrong_side", "missing"])
 def test_directional_eligibility_requires_current_supertrend(close, open_price, relationship):
@@ -178,6 +208,7 @@ def test_range_selects_highest_liquidity_independently_of_signal_volume(monkeypa
         ("BBB", "2026-10-29"),
     ]
     assert all(row["interval"] == "5" for row in rows)
+    assert all(row["direction"] == "SELL" for row in rows)
     assert metadata["total"] == 2
     assert metadata["as_of"] == "2026-10-30T09:15"
     assert len(diagnostics) == 4
@@ -386,6 +417,7 @@ def test_long_and_short_opening_signals_compete_for_one_daily_slot(monkeypatch):
     )
     assert [row["stock"] for row in rows] == ["BBB", "BBB"]
     assert all(row["signal"] == "LONG" for row in rows)
+    assert all(row["direction"] == "BUY" for row in rows)
     assert all(
         item["condition_values"]["long_signal" if item["stock"] == "BBB" else "short_signal"]
         for item in diagnostics
@@ -432,6 +464,23 @@ def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
     assert data["presentation"]["group_by_date"] is False
     assert data["presentation"]["date_chips"] is False
     assert data["presentation"]["limit"] == 1
+    assert data["columns"][1] == {
+        "key": "direction",
+        "label": "Direction",
+        "format": "direction",
+    }
+    assert data["direction"] == {
+        "enabled": True,
+        "buy": (
+            "SuperTrend is below the signal candle close and close is strictly above "
+            "SMA20, SMA50, and SMA200"
+        ),
+        "sell": (
+            "SuperTrend is above the signal candle close and close is strictly below "
+            "SMA20, SMA50, and SMA200"
+        ),
+        "neutral": "Neither BUY nor SELL rule holds",
+    }
     assert data["columns"][-1] == {
         "key": "signal",
         "label": "Signal",
@@ -447,6 +496,7 @@ def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
     assert data["total"] == len(data["matches"]) == 2
     assert all(row["date"].endswith("09:15:00") for row in data["matches"])
     assert all(row["signal"] == "SHORT" for row in data["matches"])
+    assert all(row["direction"] == "SELL" for row in data["matches"])
     assert "only the completed 09:15 IST" in data["criteria"]
 
 
