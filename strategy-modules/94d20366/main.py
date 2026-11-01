@@ -31,7 +31,9 @@ PRESENTATION = {
     "style": "table",
     "sort": {"key": "volume", "direction": "desc"},
     "ui_filters": ["symbol_search", "column_sort"],
-    "limit": 10,
+    "group_by_date": False,
+    "date_chips": False,
+    "limit": 1,
     "page_size": 10,
     "pagination": "pages",
     "notes": "",
@@ -258,7 +260,7 @@ def run_scan(
         limit = int(params.get("limit", 10))
     except (TypeError, ValueError) as exc:
         raise ScanParameterError("limit must be an integer") from exc
-    if not 1 <= limit <= PRESENTATION["limit"]:
+    if not 1 <= limit <= 10:
         raise ScanParameterError("limit must be between 1 and 10")
     try:
         liquidity_days = int(params.get("liquidity_days", DEFAULT_LIQUIDITY_DAYS))
@@ -329,23 +331,20 @@ def run_scan(
         matches_by_date: dict[date, list[dict[str, Any]]] = {}
         total = 0
         for trading_day in applied_dates:
-            day_start = datetime.combine(trading_day, time.min)
-            day_end = day_start + timedelta(days=1)
+            candle_time = datetime.combine(trading_day, FIRST_CANDLE_TIME)
             candle_result = client.query(
                 "SELECT stock, date, high, low, close, volume, vma20, "
                 "sma20, sma50, sma200, superTrend, open "
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
                 "AND stock IN {symbols:Array(String)} "
-                "AND date >= toDateTime({day_start:String}) "
-                "AND date < toDateTime({day_end:String}) "
+                "AND date = toDateTime({candle_time:String}) "
                 "AND date <= toDateTime({as_of:String}) "
                 "ORDER BY date, stock",
                 parameters={
                     "interval": interval,
                     "symbols": universe_symbols,
-                    "day_start": day_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "day_end": day_end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "candle_time": candle_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "as_of": as_of_text,
                 },
             )
@@ -384,7 +383,7 @@ def run_scan(
                     parameters={
                         "interval": interval,
                         "symbols": target_symbols,
-                        "target": day_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        "target": candle_time.strftime("%Y-%m-%d %H:%M:%S"),
                     },
                 )
                 previous_values = {
@@ -394,13 +393,14 @@ def run_scan(
 
             day_matches = []
             for raw in raw_rows:
+                normalized_date = _timestamp_ist(raw["date"])
+                if normalized_date[11:] != FIRST_CANDLE_TIME.strftime("%H:%M:%S"):
+                    continue
                 stock = str(raw["stock"])
                 raw["previous_superTrend"], raw["previous_volume"] = (
                     previous_values.get(stock, (None, None))
                 )
-                previous_values[stock] = (raw["superTrend"], raw["volume"])
                 matches, condition_values = _truth(raw)
-                normalized_date = _timestamp_ist(raw["date"])
                 if diagnostics is not None:
                     diagnostics.append(
                         {
@@ -426,37 +426,11 @@ def run_scan(
                             "superTrend": raw["superTrend"],
                         }
                     )
-            opening_time = FIRST_CANDLE_TIME.strftime("%H:%M:%S")
-            opening_matches = [
-                row for row in day_matches if row["date"][11:] == opening_time
-            ]
-            opening_matches = _highest_liquidity(
-                client, opening_matches, trading_day, liquidity_days
+            day_matches = _highest_liquidity(
+                client, day_matches, trading_day, liquidity_days
             )
-            candidates = opening_matches + [
-                row for row in day_matches if row["date"][11:] != opening_time
-            ]
-            best_by_stock = {}
-            for row in candidates:
-                previous = best_by_stock.get(row["stock"])
-                if previous is None or (row["volume"], row["date"]) > (
-                    previous["volume"], previous["date"]
-                ):
-                    best_by_stock[row["stock"]] = row
-            total += len({row["stock"] for row in day_matches})
-            day_matches = list(best_by_stock.values())
-            reverse = sort_dir == "desc"
-            day_matches.sort(
-                key=lambda row: (
-                    row[sort_by] is not None,
-                    row[sort_by] if row[sort_by] is not None else "",
-                    row["stock"],
-                ),
-                reverse=reverse,
-            )
-            matches_by_date[trading_day] = (
-                day_matches[:limit]
-            )
+            total += len(day_matches)
+            matches_by_date[trading_day] = day_matches
 
         matches = [
             row
@@ -477,14 +451,14 @@ def run_scan(
                     ],
                     "as_of": applied_as_of,
                     "criteria": (
-                        "NIFTY 200 stocks; every completed 5-minute candle; "
+                        "NIFTY 200 stocks; only the completed 09:15 IST 5-minute candle; "
                         "short: high above and close below SMA20, SMA50, and SMA200; "
                         "long: bullish body opening below and closing above all three "
                         "SMAs, with volume above the previous candle; "
                         "previous SuperTrend within the candle low-to-high range; "
                         "highest liquidity at 09:15 IST using "
                         f"{liquidity_days} prior trading sessions; "
-                        "highest-volume matching candle per stock/date; "
+                        "at most one qualifying stock per date; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
                     ),

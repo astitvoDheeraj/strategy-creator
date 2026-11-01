@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 import main
 
@@ -96,9 +97,7 @@ class Client:
         elif "SELECT DISTINCT toDate" in sql:
             rows = [(day,) for day in self.trading_dates]
         elif "SELECT stock, date, high" in sql:
-            target = datetime.fromisoformat(parameters["day_start"]).replace(
-                hour=9, minute=15
-            )
+            target = datetime.fromisoformat(parameters["candle_time"])
             rows = [
                 (
                     stock,
@@ -116,6 +115,7 @@ class Client:
                 )
                 for stock, volume in [("AAA", 1000), ("BBB", 100)]
                 if stock in parameters["symbols"]
+                and target <= datetime.fromisoformat(parameters["as_of"])
             ]
         elif "SELECT stock, superTrend, volume" in sql:
             rows = [(stock, 95.0, 500) for stock in parameters["symbols"]]
@@ -152,7 +152,7 @@ def test_range_selects_highest_liquidity_independently_of_signal_volume(monkeypa
         ("BBB", "2026-10-29"),
     ]
     assert all(row["interval"] == "5" for row in rows)
-    assert metadata["total"] == 4
+    assert metadata["total"] == 2
     assert metadata["as_of"] == "2026-10-30T09:15"
     assert len(diagnostics) == 4
     assert client.closed
@@ -170,7 +170,8 @@ def test_range_selects_highest_liquidity_independently_of_signal_volume(monkeypa
             assert "stock IN {symbols:Array(String)}" in sql
             assert "date <= toDateTime({as_of:String})" in sql
             assert params["as_of"] == "2026-10-30 09:15:00"
-            assert "candle_time" not in params
+            assert "date = toDateTime({candle_time:String})" in sql
+            assert params["candle_time"].endswith("09:15:00")
             assert "ORDER BY date, stock" in sql
 
 
@@ -225,7 +226,10 @@ def test_live_scan_excludes_unfinished_candle(monkeypatch):
     monkeypatch.setattr(
         main, "_parse_as_of", lambda value: datetime(2026, 10, 30, 9, 18, tzinfo=main.IST)
     )
-    main.run_scan({"symbols": "AAA"})
+    rows = main.run_scan(
+        {"symbols": "AAA", "from_date": "2026-10-30", "to_date": "2026-10-30"}
+    )
+    assert rows == []
     assert all(
         params["as_of"] == "2026-10-30 09:13:00"
         for _, params in client.queries
@@ -239,7 +243,7 @@ class IntradayClient(Client):
         if "SELECT stock, date, high" not in sql:
             return result
         rows = list(result.result_rows)
-        day_start = datetime.fromisoformat(parameters["day_start"])
+        day_start = datetime.fromisoformat(parameters["candle_time"])
         for minute, supertrend, close, open_price in [
             (20, 120.0, 110.0, 90.0),
             (25, 95.0, 110.0, 90.0),
@@ -257,37 +261,33 @@ class IntradayClient(Client):
         return SimpleNamespace(result_rows=[row for row in rows if row[1] <= cutoff])
 
 
-def test_intraday_uses_immediate_previous_candle_and_keeps_daily_best(monkeypatch):
+def test_intraday_matches_never_replace_opening_liquidity_winner(monkeypatch):
     client = IntradayClient()
     monkeypatch.setattr(main, "_client", lambda: client)
     metadata, diagnostics = {}, []
     rows = main.run_scan(
-        {"as_of": "2026-10-30T09:30", "limit": 1},
+        {"as_of": "2026-10-30T09:30"},
         metadata=metadata, diagnostics=diagnostics,
     )
     assert [(row["stock"], row["date"]) for row in rows] == [
-        ("AAA", "2026-10-30T09:30:00"),
-        ("AAA", "2026-10-29T09:30:00"),
+        ("BBB", "2026-10-30T09:15:00"),
+        ("BBB", "2026-10-29T09:15:00"),
     ]
-    assert metadata["total"] == 4  # Unique stock/date matches before capping.
+    assert metadata["total"] == 2
+    assert len(diagnostics) == 4
     for item in diagnostics:
         values = item["condition_values"]
-        if item["at"].endswith("09:20:00"):
-            assert values["long_signal"]
-            assert values["previous_superTrend"] == 103.0
-        elif item["at"].endswith("09:25:00"):
-            assert not values["all_conditions"]
-            assert values["previous_superTrend"] == 120.0
-        elif item["at"].endswith("09:30:00"):
-            assert values["short_signal"]
-            assert values["previous_superTrend"] == 95.0
+        assert item["at"].endswith("09:15:00")
+        assert values["short_signal"]
+        assert values["previous_superTrend"] == 95.0
+        assert values["previous_volume"] == 500
     for sql, params in client.queries:
         if "SELECT stock, superTrend, volume" in sql:
             assert "LIMIT 1 BY stock" in sql
-            assert params["target"].endswith("00:00:00")
+            assert params["target"].endswith("09:15:00")
 
 
-def test_intraday_replay_excludes_later_candles_and_ranks_only_opening(monkeypatch):
+def test_intraday_replay_returns_only_one_opening_stock(monkeypatch):
     client = IntradayClient()
     monkeypatch.setattr(main, "_client", lambda: client)
     diagnostics = []
@@ -299,10 +299,100 @@ def test_intraday_replay_excludes_later_candles_and_ranks_only_opening(monkeypat
         },
         diagnostics=diagnostics,
     )
-    assert {row["stock"] for row in rows} == {"AAA", "BBB"}
-    assert all(row["date"] == "2026-10-30T09:20:00" for row in rows)
-    assert len(diagnostics) == 4
+    assert [row["stock"] for row in rows] == ["BBB"]
+    assert all(row["date"] == "2026-10-30T09:15:00" for row in rows)
+    assert len(diagnostics) == 2
     assert len([sql for sql, _ in client.queries if "daily_volume" in sql]) == 1
+
+
+def test_long_and_short_opening_signals_compete_for_one_daily_slot(monkeypatch):
+    class MixedClient(Client):
+        def query(self, sql, parameters=None):
+            result = super().query(sql, parameters)
+            if "SELECT stock, date, high" in sql:
+                rows = [list(row) for row in result.result_rows]
+                for row in rows:
+                    if row[0] == "BBB":
+                        row[4], row[11] = 110.0, 90.0
+                        row[5] = 600
+                return SimpleNamespace(result_rows=rows)
+            return result
+
+    monkeypatch.setattr(main, "_client", MixedClient)
+    diagnostics = []
+    rows = main.run_scan(
+        {"as_of": "2026-10-30T15:30", "sort_by": "stock", "sort_dir": "asc"},
+        diagnostics=diagnostics,
+    )
+    assert [row["stock"] for row in rows] == ["BBB", "BBB"]
+    assert all(
+        item["condition_values"]["long_signal" if item["stock"] == "BBB" else "short_signal"]
+        for item in diagnostics
+    )
+
+
+def test_no_opening_match_does_not_fall_back_to_intraday(monkeypatch):
+    class NoOpeningClient(IntradayClient):
+        def query(self, sql, parameters=None):
+            result = super().query(sql, parameters)
+            if "SELECT stock, date, high" in sql:
+                rows = [list(row) for row in result.result_rows]
+                for row in rows:
+                    if row[1].time() == main.FIRST_CANDLE_TIME:
+                        row[7] = row[2]
+                return SimpleNamespace(result_rows=rows)
+            return result
+
+    client = NoOpeningClient()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    metadata = {}
+    assert main.run_scan({"as_of": "2026-10-30T09:30"}, metadata=metadata) == []
+    assert metadata["total"] == 0
+    assert not any("daily_volume" in sql for sql, _ in client.queries)
+    assert client.closed
+
+
+def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
+    monkeypatch.setattr(main, "_client", Client)
+    with TestClient(main.app) as api:
+        assert api.get("/strategy-api/94d20366/health").json() == {"status": "ok"}
+        response = api.get(
+            "/strategy-api/94d20366/scan",
+            params={
+                "from_date": "2026-10-29",
+                "to_date": "2026-10-30",
+                "as_of": "2026-10-30T15:30",
+            },
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"]
+    assert data["presentation"]["style"] == "table"
+    assert data["presentation"]["group_by_date"] is False
+    assert data["presentation"]["date_chips"] is False
+    assert data["presentation"]["limit"] == 1
+    assert data["date_range"]["mode"] == "range"
+    assert data["date_range"]["from_date"] == "2026-10-29"
+    assert data["date_range"]["to_date"] == "2026-10-30"
+    assert data["total"] == len(data["matches"]) == 2
+    assert all(row["date"].endswith("09:15:00") for row in data["matches"])
+    assert "only the completed 09:15 IST" in data["criteria"]
+
+
+def test_replay_before_opening_returns_no_winner(monkeypatch):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    metadata = {}
+    assert main.run_scan(
+        {
+            "from_date": "2026-10-30",
+            "to_date": "2026-10-30",
+            "as_of": "2026-10-30T09:14",
+        },
+        metadata=metadata,
+    ) == []
+    assert metadata["total"] == 0
+    assert not any("daily_volume" in sql for sql, _ in client.queries)
 
 
 def test_default_window_is_last_sixty_trading_sessions(monkeypatch):
