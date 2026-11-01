@@ -1,0 +1,1 @@
+This module scans active NIFTY 500 members on weekly candles and returns a BUY when the candle closes above SuperTrend while its low is at or below SuperTrend; it supports bounded date-range replay, historical `as_of` evaluation, and symbol filtering using ClickHouse data.
