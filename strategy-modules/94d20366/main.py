@@ -131,6 +131,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         high is not None
         and low is not None
         and close is not None
+        and indicators["superTrend"] is not None
         and previous_supertrend is not None
         and all(
             row[indicator] is not None for indicator in ("sma20", "sma50", "sma200")
@@ -169,7 +170,6 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "previous_superTrend_in_range": conditions["previous_superTrend_in_range"],
     }
     long_signal = all(long_conditions.values())
-    matched = short_signal or long_signal
     signal = None
     if close is not None and all(value is not None for value in indicators.values()):
         moving_averages = (row["sma20"], row["sma50"], row["sma200"])
@@ -181,6 +181,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             close < moving_average for moving_average in moving_averages
         ):
             signal = "SHORT"
+    matched = (short_signal and signal == "SHORT") or (long_signal and signal == "LONG")
     measured = {
         "data_available": available and (short_signal or long_available),
         "long_data_available": long_available,
@@ -478,6 +479,9 @@ def run_scan(
                         "long: bullish body opening below and closing above all three "
                         "SMAs, with volume above the previous candle; "
                         "previous SuperTrend within the candle low-to-high range; "
+                        "before liquidity ranking, long requires close strictly above "
+                        "all three SMAs and current SuperTrend; short requires close "
+                        "strictly below all three SMAs and current SuperTrend; "
                         "highest liquidity at 09:15 IST using "
                         f"{liquidity_days} prior trading sessions; "
                         "at most one qualifying stock per date; "

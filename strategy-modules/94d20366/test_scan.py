@@ -56,6 +56,24 @@ def test_signal_requires_strict_supertrend_and_moving_average_relationships():
     assert main._truth(candle(sma20=None))[1]["signal"] is None
 
 
+@pytest.mark.parametrize("close,open_price", [(90.0, 105.0), (110.0, 90.0)])
+@pytest.mark.parametrize("relationship", ["equal", "wrong_side", "missing"])
+def test_directional_eligibility_requires_current_supertrend(close, open_price, relationship):
+    supertrend = {
+        "equal": close,
+        "wrong_side": close - 1 if close == 90.0 else close + 1,
+        "missing": None,
+    }[relationship]
+    matched, values = main._truth(
+        candle(close=close, open=open_price, superTrend=supertrend)
+    )
+    assert not matched
+    assert values["signal"] is None
+    assert values["all_conditions"] is False
+    if relationship == "missing":
+        assert values["data_available"] is False
+
+
 @pytest.mark.parametrize("indicator", ["sma20", "sma50", "sma200"])
 @pytest.mark.parametrize("boundary", ["open", "close"])
 def test_long_crossings_are_strict(indicator, boundary):
@@ -201,6 +219,40 @@ def test_single_match_skips_liquidity_and_intersects_live_universe(monkeypatch):
         for _, params in client.queries
         if params and "symbols" in params
     )
+
+
+@pytest.mark.parametrize("invalid_symbols", [{"BBB"}, {"AAA", "BBB"}])
+def test_ineligible_stocks_are_removed_before_liquidity(monkeypatch, invalid_symbols):
+    class DirectionClient(Client):
+        def query(self, sql, parameters=None):
+            result = super().query(sql, parameters)
+            if "SELECT stock, date, high" in sql:
+                rows = [list(row) for row in result.result_rows]
+                for row in rows:
+                    if row[0] in invalid_symbols:
+                        row[10] = row[4] - 1
+                return SimpleNamespace(result_rows=rows)
+            return result
+
+    client = DirectionClient(sessions=0)
+    monkeypatch.setattr(main, "_client", lambda: client)
+    diagnostics, metadata = [], {}
+    rows = main.run_scan(
+        {"as_of": "2026-10-30T09:15"},
+        diagnostics=diagnostics,
+        metadata=metadata,
+    )
+    expected = [] if "AAA" in invalid_symbols else ["AAA", "AAA"]
+    assert [row["stock"] for row in rows] == expected
+    assert all(row["signal"] == "SHORT" for row in rows)
+    assert metadata["total"] == len(expected)
+    assert not any("daily_volume" in sql for sql, _ in client.queries)
+    assert all(
+        not item["condition_values"]["all_conditions"]
+        for item in diagnostics
+        if item["stock"] in invalid_symbols
+    )
+    assert client.closed
 
 
 def test_missing_liquidity_history_fails_and_closes_client(monkeypatch):
