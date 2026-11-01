@@ -12,7 +12,7 @@ from main import _truth, run_scan, scan
 FIXTURE_PATH = (
     Path(__file__).parent
     / "chart-evidence"
-    / "4f0d6bf4b23f"
+    / "31f4a267aa56"
     / "acceptance_cases.json"
 )
 with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:
@@ -23,37 +23,36 @@ IST = ZoneInfo(FIXTURE["timezone"])
 RESULTS = []
 
 
-def test_truth_matches_confirmed_supertrend_conditions():
+def test_truth_matches_confirmed_conditions_without_current_supertrend_filter():
     matches, conditions = _truth(
         {
             "high": 1628.0,
-            "close": 1598.3,
-            "sma20": 1622.08,
-            "sma50": 1616.11,
-            "sma200": 1608.22,
-            "superTrend": 1625.0,
-            "previous_close": 1630.1,
-            "previous_superTrend": 1590.0,
-        }
-    )
-
-    assert matches
-    assert conditions["data_available"] is True
-    assert conditions["high_above_superTrend"] is True
-    assert conditions["previous_superTrend_below_close"] is True
-    assert conditions["all_conditions"] is True
-
-
-def test_truth_rejects_missing_previous_candle_data():
-    matches, conditions = _truth(
-        {
-            "high": 1628.0,
+            "low": 1590.2,
             "close": 1598.3,
             "sma20": 1622.08,
             "sma50": 1616.11,
             "sma200": 1608.22,
             "superTrend": 1633.32,
-            "previous_close": None,
+            "previous_superTrend": 1623.36,
+        }
+    )
+
+    assert matches
+    assert conditions["data_available"] is True
+    assert conditions["previous_superTrend_in_range"] is True
+    assert conditions["all_conditions"] is True
+
+
+def test_truth_rejects_missing_candle_or_previous_supertrend_data():
+    matches, conditions = _truth(
+        {
+            "high": 1628.0,
+            "low": 1590.2,
+            "close": 1598.3,
+            "sma20": 1622.08,
+            "sma50": 1616.11,
+            "sma200": 1608.22,
+            "superTrend": 1633.32,
             "previous_superTrend": None,
         }
     )
@@ -63,23 +62,42 @@ def test_truth_rejects_missing_previous_candle_data():
     assert conditions["all_conditions"] is False
 
 
-def test_truth_rejects_previous_supertrend_above_current_close():
+@pytest.mark.parametrize("previous_supertrend", [1590.2, 1628.0])
+def test_truth_includes_previous_supertrend_range_boundaries(previous_supertrend):
     matches, conditions = _truth(
         {
             "high": 1628.0,
+            "low": 1590.2,
             "close": 1598.3,
             "sma20": 1622.08,
             "sma50": 1616.11,
             "sma200": 1608.22,
-            "superTrend": 1625.0,
-            "previous_close": 1630.1,
-            "previous_superTrend": 1623.36,
+            "superTrend": 1633.32,
+            "previous_superTrend": previous_supertrend,
+        }
+    )
+
+    assert matches
+    assert conditions["previous_superTrend_in_range"] is True
+
+
+@pytest.mark.parametrize("previous_supertrend", [1590.19, 1628.01])
+def test_truth_rejects_previous_supertrend_outside_candle_range(previous_supertrend):
+    matches, conditions = _truth(
+        {
+            "high": 1628.0,
+            "low": 1590.2,
+            "close": 1598.3,
+            "sma20": 1622.08,
+            "sma50": 1616.11,
+            "sma200": 1608.22,
+            "superTrend": 1633.32,
+            "previous_superTrend": previous_supertrend,
         }
     )
 
     assert not matches
-    assert conditions["previous_superTrend_below_close"] is False
-    assert conditions["all_conditions"] is False
+    assert conditions["previous_superTrend_in_range"] is False
 
 
 @pytest.mark.parametrize(
@@ -162,10 +180,9 @@ def test_chart_acceptance(case):
             "condition_values": condition_values,
             "matched_rows": [
                 {
-                    **row,
-                    "at": int(
-                        datetime.fromisoformat(row["date"]).replace(tzinfo=IST).timestamp()
-                    ),
+                    "stock": row["stock"],
+                    "at": row["date"],
+                    "interval": row["interval"],
                 }
                 for row in actual_rows
             ],

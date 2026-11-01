@@ -9,17 +9,18 @@ import main
 def candle(**overrides):
     return {
         "high": 110.0,
+        "low": 80.0,
         "close": 90.0,
         "sma20": 100.0,
         "sma50": 101.0,
         "sma200": 102.0,
         "superTrend": 103.0,
-        "previous_superTrend": 89.0,
+        "previous_superTrend": 95.0,
         **overrides,
     }
 
 
-@pytest.mark.parametrize("indicator", ["sma20", "sma50", "sma200", "superTrend"])
+@pytest.mark.parametrize("indicator", ["sma20", "sma50", "sma200"])
 @pytest.mark.parametrize("boundary", ["high", "close"])
 def test_indicator_comparisons_are_strict(indicator, boundary):
     row = candle()
@@ -27,11 +28,11 @@ def test_indicator_comparisons_are_strict(indicator, boundary):
     assert main._truth(row)[0] is False
 
 
-def test_previous_supertrend_compares_with_current_not_previous_close():
-    assert main._truth(candle(previous_close=80.0))[0] is True
-    matched, values = main._truth(candle(previous_superTrend=90.0))
+def test_previous_supertrend_uses_candle_range_not_close():
+    assert main._truth(candle(previous_close=120.0, superTrend=200.0))[0] is True
+    matched, values = main._truth(candle(previous_superTrend=79.99))
     assert not matched
-    assert values["previous_superTrend_below_close"] is False
+    assert values["previous_superTrend_in_range"] is False
 
 
 class Client:
@@ -51,12 +52,24 @@ class Client:
                 hour=9, minute=15
             )
             rows = [
-                (stock, target, 110.0, 90.0, volume, 500.0, 100.0, 101.0, 102.0, 103.0)
+                (
+                    stock,
+                    target,
+                    110.0,
+                    80.0,
+                    90.0,
+                    volume,
+                    500.0,
+                    100.0,
+                    101.0,
+                    102.0,
+                    103.0,
+                )
                 for stock, volume in [("AAA", 1000), ("BBB", 100)]
                 if stock in parameters["symbols"]
             ]
-        elif "argMax(tuple" in sql:
-            rows = [(stock, (80.0, 89.0)) for stock in parameters["symbols"]]
+        elif "argMax(superTrend" in sql:
+            rows = [(stock, 95.0) for stock in parameters["symbols"]]
         elif "daily_volume" in sql:
             rows = [
                 ("AAA", self.sessions, 1000.0, 0.5),
