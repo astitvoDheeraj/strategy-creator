@@ -1,0 +1,122 @@
+{
+  "setup_id": "acff861e",
+  "screener_job_id": "94d20366",
+  "screener_title": "Dual Momentum Detector",
+  "screener_params": {},
+  "interval": "5",
+  "universe": {
+    "mode": "inherit",
+    "stocks": [],
+    "index": ""
+  },
+  "scope": {
+    "mode": "all",
+    "n": 0,
+    "column": "",
+    "direction": "desc"
+  },
+  "run_window": {
+    "start_date": "",
+    "end_date": "",
+    "time_start": "09:20",
+    "time_end": "15:15",
+    "skip_first_minutes": 0,
+    "square_off_time": "15:15",
+    "weekdays": []
+  },
+  "dedupe_policy": "once_ever",
+  "alert": {
+    "template": "Symbol: {Symbol}\nLast price (LTP): {Last price (LTP)}\nVolume: {Volume}\nCandle time: {Candle time}\nAvg volume (20): {Avg volume (20)}\nSMA 20: {SMA 20}\nSMA 50: {SMA 50}\nSMA 200: {SMA 200}\nSuperTrend: {SuperTrend}",
+    "channels": [
+      "inapp",
+      "email"
+    ],
+    "include_columns": [
+      "Symbol",
+      "Last price (LTP)",
+      "Volume",
+      "Candle time",
+      "Avg volume (20)",
+      "SMA 20",
+      "SMA 50",
+      "SMA 200",
+      "SuperTrend"
+    ]
+  },
+  "trade_legs": true,
+  "legs": {
+    "side": "long",
+    "entry": {
+      "kind": "market",
+      "pullback_pct": 0.05,
+      "timeout_candles": 1
+    },
+    "sl": {
+      "kind": "range",
+      "value": 2.0
+    },
+    "targets": [
+      {
+        "kind": "fib",
+        "value": 38.6,
+        "qty_pct": 33.0
+      },
+      {
+        "kind": "fib",
+        "value": 100.0,
+        "qty_pct": 33.0
+      }
+    ],
+    "trailing": {
+      "kind": "none",
+      "value": 0.0
+    },
+    "time_exit_minutes": 0,
+    "exit_on_drop": false,
+    "exit_on_opposite": false,
+    "ref_candle": "signal",
+    "single_leg": false,
+    "remainder": "last_target",
+    "breakeven_after_first_target": false,
+    "adds": {
+      "enabled": false,
+      "kind": "range",
+      "step": 0.5,
+      "max_adds": 3,
+      "qty_mult": 1.0
+    },
+    "nifty_filter": "off"
+  },
+  "sizing": {
+    "capital": 1000000.0,
+    "per_position_cap": 25000.0,
+    "max_positions": 3,
+    "product": "MIS",
+    "slippage_pct": 0.05,
+    "risk_pct": 0.0
+  },
+  "guardrails": {
+    "max_alerts_per_day": 60,
+    "max_daily_loss": 0.0,
+    "max_trades_per_day": 10,
+    "cooldown_minutes": 30,
+    "max_per_sector": 0
+  },
+  "entry_style": "",
+  "exit_rules": "Exit any remaining open quantity at the close of the final candle of the day.",
+  "notes": "",
+  "custom_instructions": "",
+  "data_wait": {
+    "max_wait_sec": 300
+  },
+  "direction": {
+    "mode": "screener",
+    "column": "direction"
+  },
+  "dynamic_params": false,
+  "context": {
+    "candles": 20
+  },
+  "assumed_defaults": [],
+  "mode": "alert"
+}
