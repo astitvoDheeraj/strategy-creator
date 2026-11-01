@@ -26,6 +26,15 @@ COLUMNS = [
     {"key": "sma50", "label": "SMA 50", "format": "price"},
     {"key": "sma200", "label": "SMA 200", "format": "price"},
     {"key": "superTrend", "label": "SuperTrend", "format": "price"},
+    {
+        "key": "signal",
+        "label": "Signal",
+        "format": "text",
+        "background_colors": {
+            "LONG": "rgba(34, 197, 94, 0.18)",
+            "SHORT": "rgba(239, 68, 68, 0.18)",
+        },
+    },
 ]
 PRESENTATION = {
     "style": "table",
@@ -161,6 +170,17 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     }
     long_signal = all(long_conditions.values())
     matched = short_signal or long_signal
+    signal = None
+    if close is not None and all(value is not None for value in indicators.values()):
+        moving_averages = (row["sma20"], row["sma50"], row["sma200"])
+        if close > indicators["superTrend"] and all(
+            close > moving_average for moving_average in moving_averages
+        ):
+            signal = "LONG"
+        elif close < indicators["superTrend"] and all(
+            close < moving_average for moving_average in moving_averages
+        ):
+            signal = "SHORT"
     measured = {
         "data_available": available and (short_signal or long_available),
         "long_data_available": long_available,
@@ -176,6 +196,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "long_conditions": long_conditions,
         "short_signal": short_signal,
         "long_signal": long_signal,
+        "signal": signal,
         "all_conditions": matched,
     }
     return matched, measured
@@ -424,6 +445,7 @@ def run_scan(
                             "sma50": raw["sma50"],
                             "sma200": raw["sma200"],
                             "superTrend": raw["superTrend"],
+                            "signal": condition_values["signal"],
                         }
                     )
             day_matches = _highest_liquidity(

@@ -44,8 +44,16 @@ def test_long_setup_matches_without_short_conditions():
     assert matched
     assert values["long_signal"] is True
     assert values["short_signal"] is False
+    assert values["signal"] == "LONG"
     assert all(values["long_conditions"].values())
     assert values["previous_volume"] == 500
+
+
+def test_signal_requires_strict_supertrend_and_moving_average_relationships():
+    assert main._truth(candle())[1]["signal"] == "SHORT"
+    assert main._truth(candle(close=103.0))[1]["signal"] is None
+    assert main._truth(candle(close=100.0))[1]["signal"] is None
+    assert main._truth(candle(sma20=None))[1]["signal"] is None
 
 
 @pytest.mark.parametrize("indicator", ["sma20", "sma50", "sma200"])
@@ -325,6 +333,7 @@ def test_long_and_short_opening_signals_compete_for_one_daily_slot(monkeypatch):
         diagnostics=diagnostics,
     )
     assert [row["stock"] for row in rows] == ["BBB", "BBB"]
+    assert all(row["signal"] == "LONG" for row in rows)
     assert all(
         item["condition_values"]["long_signal" if item["stock"] == "BBB" else "short_signal"]
         for item in diagnostics
@@ -371,11 +380,21 @@ def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
     assert data["presentation"]["group_by_date"] is False
     assert data["presentation"]["date_chips"] is False
     assert data["presentation"]["limit"] == 1
+    assert data["columns"][-1] == {
+        "key": "signal",
+        "label": "Signal",
+        "format": "text",
+        "background_colors": {
+            "LONG": "rgba(34, 197, 94, 0.18)",
+            "SHORT": "rgba(239, 68, 68, 0.18)",
+        },
+    }
     assert data["date_range"]["mode"] == "range"
     assert data["date_range"]["from_date"] == "2026-10-29"
     assert data["date_range"]["to_date"] == "2026-10-30"
     assert data["total"] == len(data["matches"]) == 2
     assert all(row["date"].endswith("09:15:00") for row in data["matches"])
+    assert all(row["signal"] == "SHORT" for row in data["matches"])
     assert "only the completed 09:15 IST" in data["criteria"]
 
 
