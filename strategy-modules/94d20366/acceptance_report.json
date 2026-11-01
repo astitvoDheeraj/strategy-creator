@@ -1,6 +1,6 @@
 {
   "command": "python -m pytest -vv test_acceptance.py",
-  "summary": "10 passed, 0 failed, 0 skipped",
+  "summary": "11 passed, 0 failed, 0 skipped",
   "exit_code": 0,
   "cases": [
     {
@@ -9,14 +9,19 @@
       "symbol": "COLPAL",
       "interval": "5",
       "at": 1793331900,
+      "timestamp_ist": "2026-10-30T09:15:00",
       "expected": "must_match",
       "passed": true,
       "matched": true,
       "condition_values": {
         "data_available": true,
+        "long_data_available": true,
+        "open": 1628.0,
         "high": 1628.0,
         "low": 1590.2,
         "close": 1598.3,
+        "volume": 49724,
+        "previous_volume": 18222,
         "sma20": 1622.08,
         "sma50": 1616.11,
         "sma200": 1608.22,
@@ -29,13 +34,92 @@
         "close_below_sma50": true,
         "close_below_sma200": true,
         "previous_superTrend_in_range": true,
+        "long_conditions": {
+          "bullish_body": false,
+          "body_crosses_sma20": false,
+          "body_crosses_sma50": false,
+          "body_crosses_sma200": false,
+          "volume_above_previous": true,
+          "previous_superTrend_in_range": true
+        },
+        "short_signal": true,
+        "long_signal": false,
         "all_conditions": true
       },
       "matched_rows": [
         {
           "stock": "COLPAL",
-          "at": "2026-10-30T09:15:00",
-          "interval": "5"
+          "interval": "5",
+          "scan_date": "2026-10-30",
+          "close": 1598.3,
+          "volume": 49724,
+          "date": "2026-10-30T09:15:00",
+          "vma20": 15408.7,
+          "sma20": 1622.08,
+          "sma50": 1616.11,
+          "sma200": 1608.22,
+          "superTrend": 1633.32,
+          "at": 1793331900
+        }
+      ]
+    },
+    {
+      "chart_id": "clmvxazb8j9o",
+      "mark_id": "mkmvxatz4n86",
+      "symbol": "BAJFINANCE",
+      "interval": "5",
+      "at": 1791863100,
+      "timestamp_ist": "2026-10-13T09:15:00",
+      "expected": "must_match",
+      "passed": true,
+      "matched": true,
+      "condition_values": {
+        "data_available": true,
+        "long_data_available": true,
+        "open": 946.6,
+        "high": 962.1,
+        "low": 946.1,
+        "close": 961.5,
+        "volume": 274255,
+        "previous_volume": 164486,
+        "sma20": 958.8349999999998,
+        "sma50": 958.9889999999999,
+        "sma200": 959.27,
+        "superTrend": 953.2581004559636,
+        "previous_superTrend": 961.2056697676026,
+        "high_above_sma20": true,
+        "high_above_sma50": true,
+        "high_above_sma200": true,
+        "close_below_sma20": false,
+        "close_below_sma50": false,
+        "close_below_sma200": false,
+        "previous_superTrend_in_range": true,
+        "long_conditions": {
+          "bullish_body": true,
+          "body_crosses_sma20": true,
+          "body_crosses_sma50": true,
+          "body_crosses_sma200": true,
+          "volume_above_previous": true,
+          "previous_superTrend_in_range": true
+        },
+        "short_signal": false,
+        "long_signal": true,
+        "all_conditions": true
+      },
+      "matched_rows": [
+        {
+          "stock": "BAJFINANCE",
+          "interval": "5",
+          "scan_date": "2026-10-13",
+          "close": 961.5,
+          "volume": 274255,
+          "date": "2026-10-13T09:15:00",
+          "vma20": 109919.65,
+          "sma20": 958.8349999999998,
+          "sma50": 958.9889999999999,
+          "sma200": 959.27,
+          "superTrend": 953.2581004559636,
+          "at": 1791863100
         }
       ]
     }

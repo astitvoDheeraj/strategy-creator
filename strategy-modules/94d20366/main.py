@@ -136,17 +136,47 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             available and low <= previous_supertrend <= high
         ),
     }
+    short_signal = all(conditions.values())
+    open_price = row.get("open")
+    volume = row.get("volume")
+    previous_volume = row.get("previous_volume")
+    long_available = (
+        available
+        and open_price is not None
+        and volume is not None
+        and previous_volume is not None
+    )
+    long_conditions = {
+        "bullish_body": long_available and close > open_price,
+        **{
+            f"body_crosses_{indicator}": (
+                long_available and open_price < row[indicator] < close
+            )
+            for indicator in ("sma20", "sma50", "sma200")
+        },
+        "volume_above_previous": long_available and volume > previous_volume,
+        "previous_superTrend_in_range": conditions["previous_superTrend_in_range"],
+    }
+    long_signal = all(long_conditions.values())
+    matched = short_signal or long_signal
     measured = {
-        "data_available": available,
+        "data_available": available and (short_signal or long_available),
+        "long_data_available": long_available,
+        "open": open_price,
         "high": high,
         "low": low,
         "close": close,
+        "volume": volume,
+        "previous_volume": previous_volume,
         **indicators,
         "previous_superTrend": previous_supertrend,
         **conditions,
-        "all_conditions": all(conditions.values()),
+        "long_conditions": long_conditions,
+        "short_signal": short_signal,
+        "long_signal": long_signal,
+        "all_conditions": matched,
     }
-    return all(conditions.values()), measured
+    return matched, measured
 
 
 def _highest_liquidity(client, matches, trading_day, liquidity_days):
@@ -192,8 +222,8 @@ def run_scan(
     metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     interval = str(params.get("interval") or DEFAULT_INTERVAL)
-    if not interval:
-        raise ScanParameterError("interval must not be empty")
+    if interval != DEFAULT_INTERVAL:
+        raise ScanParameterError("interval must be 5")
     as_of = _parse_as_of(params.get("as_of"))
     if params.get("as_of") is None:
         as_of -= timedelta(minutes=5)
@@ -228,8 +258,8 @@ def run_scan(
         limit = int(params.get("limit", 10))
     except (TypeError, ValueError) as exc:
         raise ScanParameterError("limit must be an integer") from exc
-    if limit < 0:
-        raise ScanParameterError("limit must be zero or a positive integer")
+    if not 1 <= limit <= PRESENTATION["limit"]:
+        raise ScanParameterError("limit must be between 1 and 10")
     try:
         liquidity_days = int(params.get("liquidity_days", DEFAULT_LIQUIDITY_DAYS))
     except (TypeError, ValueError) as exc:
@@ -303,22 +333,20 @@ def run_scan(
             day_end = day_start + timedelta(days=1)
             candle_result = client.query(
                 "SELECT stock, date, high, low, close, volume, vma20, "
-                "sma20, sma50, sma200, superTrend "
+                "sma20, sma50, sma200, superTrend, open "
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
                 "AND stock IN {symbols:Array(String)} "
                 "AND date >= toDateTime({day_start:String}) "
                 "AND date < toDateTime({day_end:String}) "
                 "AND date <= toDateTime({as_of:String}) "
-                "AND formatDateTime(date, '%H:%i:%S') = {candle_time:String} "
-                "ORDER BY stock",
+                "ORDER BY date, stock",
                 parameters={
                     "interval": interval,
                     "symbols": universe_symbols,
                     "day_start": day_start.strftime("%Y-%m-%d %H:%M:%S"),
                     "day_end": day_end.strftime("%Y-%m-%d %H:%M:%S"),
                     "as_of": as_of_text,
-                    "candle_time": FIRST_CANDLE_TIME.strftime("%H:%M:%S"),
                 },
             )
             raw_rows = [
@@ -336,37 +364,41 @@ def run_scan(
                             "sma50",
                             "sma200",
                             "superTrend",
+                            "open",
                         ),
                         values,
                     )
                 )
                 for values in candle_result.result_rows
             ]
-            target_symbols = [str(row["stock"]) for row in raw_rows]
+            target_symbols = sorted({str(row["stock"]) for row in raw_rows})
             previous_values: dict[str, Any] = {}
             if target_symbols:
                 previous_result = client.query(
-                    "SELECT stock, argMax(superTrend, date) "
+                    "SELECT stock, superTrend, volume "
                     "FROM stock__candles_data "
                     "WHERE interval = {interval:String} "
                     "AND stock IN {symbols:Array(String)} "
                     "AND date < toDateTime({target:String}) "
-                    "GROUP BY stock",
+                    "ORDER BY stock, date DESC LIMIT 1 BY stock",
                     parameters={
                         "interval": interval,
                         "symbols": target_symbols,
-                        "target": datetime.combine(
-                            trading_day, FIRST_CANDLE_TIME
-                        ).strftime("%Y-%m-%d %H:%M:%S"),
+                        "target": day_start.strftime("%Y-%m-%d %H:%M:%S"),
                     },
                 )
                 previous_values = {
-                    str(stock): value for stock, value in previous_result.result_rows
+                    str(stock): (supertrend, volume)
+                    for stock, supertrend, volume in previous_result.result_rows
                 }
 
             day_matches = []
             for raw in raw_rows:
-                raw["previous_superTrend"] = previous_values.get(str(raw["stock"]))
+                stock = str(raw["stock"])
+                raw["previous_superTrend"], raw["previous_volume"] = (
+                    previous_values.get(stock, (None, None))
+                )
+                previous_values[stock] = (raw["superTrend"], raw["volume"])
                 matches, condition_values = _truth(raw)
                 normalized_date = _timestamp_ist(raw["date"])
                 if diagnostics is not None:
@@ -379,7 +411,6 @@ def run_scan(
                         }
                     )
                 if matches:
-                    total += 1
                     day_matches.append(
                         {
                             "stock": str(raw["stock"]),
@@ -395,9 +426,25 @@ def run_scan(
                             "superTrend": raw["superTrend"],
                         }
                     )
-            day_matches = _highest_liquidity(
-                client, day_matches, trading_day, liquidity_days
+            opening_time = FIRST_CANDLE_TIME.strftime("%H:%M:%S")
+            opening_matches = [
+                row for row in day_matches if row["date"][11:] == opening_time
+            ]
+            opening_matches = _highest_liquidity(
+                client, opening_matches, trading_day, liquidity_days
             )
+            candidates = opening_matches + [
+                row for row in day_matches if row["date"][11:] != opening_time
+            ]
+            best_by_stock = {}
+            for row in candidates:
+                previous = best_by_stock.get(row["stock"])
+                if previous is None or (row["volume"], row["date"]) > (
+                    previous["volume"], previous["date"]
+                ):
+                    best_by_stock[row["stock"]] = row
+            total += len({row["stock"] for row in day_matches})
+            day_matches = list(best_by_stock.values())
             reverse = sort_dir == "desc"
             day_matches.sort(
                 key=lambda row: (
@@ -408,7 +455,7 @@ def run_scan(
                 reverse=reverse,
             )
             matches_by_date[trading_day] = (
-                day_matches[:limit] if limit else day_matches
+                day_matches[:limit]
             )
 
         matches = [
@@ -430,11 +477,14 @@ def run_scan(
                     ],
                     "as_of": applied_as_of,
                     "criteria": (
-                        "NIFTY 200 stocks; first 5-minute candle at 09:15 IST; "
-                        "high above and close below SMA20, SMA50, and SMA200; "
+                        "NIFTY 200 stocks; every completed 5-minute candle; "
+                        "short: high above and close below SMA20, SMA50, and SMA200; "
+                        "long: bullish body opening below and closing above all three "
+                        "SMAs, with volume above the previous candle; "
                         "previous SuperTrend within the candle low-to-high range; "
-                        "highest liquidity per date using "
+                        "highest liquidity at 09:15 IST using "
                         f"{liquidity_days} prior trading sessions; "
+                        "highest-volume matching candle per stock/date; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
                     ),

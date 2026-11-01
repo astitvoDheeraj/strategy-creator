@@ -1,5 +1,7 @@
 import json
 import os
+import shlex
+import sys
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,7 +14,7 @@ from main import _truth, run_scan, scan
 FIXTURE_PATH = (
     Path(__file__).parent
     / "chart-evidence"
-    / "31f4a267aa56"
+    / "cbcf05d6839f"
     / "acceptance_cases.json"
 )
 with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:
@@ -174,15 +176,19 @@ def test_chart_acceptance(case):
             "symbol": case["symbol"],
             "interval": case["interval"],
             "at": case["at"],
+            "timestamp_ist": target_time,
             "expected": case["expect"],
             "passed": passed,
             "matched": bool(actual_rows),
             "condition_values": condition_values,
             "matched_rows": [
                 {
-                    "stock": row["stock"],
-                    "at": row["date"],
-                    "interval": row["interval"],
+                    **row,
+                    "at": int(
+                        datetime.fromisoformat(row["date"])
+                        .replace(tzinfo=IST)
+                        .timestamp()
+                    ),
                 }
                 for row in actual_rows
             ],
@@ -230,7 +236,7 @@ def write_acceptance_report(request):
         json.dumps(
             {
                 "command": (
-                    "python -m pytest -vv test_acceptance.py"
+                    shlex.join(["python", "-m", "pytest", *sys.argv[1:]])
                 ),
                 "summary": summary,
                 "exit_code": int(bool(failed or skipped)),
