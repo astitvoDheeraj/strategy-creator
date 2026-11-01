@@ -1,7 +1,7 @@
 {
   "command": "python -m pytest -vv test_acceptance.py",
-  "summary": "6 passed, 1 failed, 0 skipped",
-  "exit_code": 1,
+  "summary": "10 passed, 0 failed, 0 skipped",
+  "exit_code": 0,
   "cases": [
     {
       "chart_id": "clmvwb7pfxe",
@@ -10,31 +10,34 @@
       "interval": "5",
       "at": 1793331900,
       "expected": "must_match",
-      "passed": false,
-      "matched": false,
+      "passed": true,
+      "matched": true,
       "condition_values": {
         "data_available": true,
         "high": 1628.0,
+        "low": 1590.2,
         "close": 1598.3,
         "sma20": 1622.08,
         "sma50": 1616.11,
         "sma200": 1608.22,
         "superTrend": 1633.32,
-        "previous_close": 1630.1,
         "previous_superTrend": 1623.36,
         "high_above_sma20": true,
         "high_above_sma50": true,
         "high_above_sma200": true,
-        "high_above_superTrend": false,
         "close_below_sma20": true,
         "close_below_sma50": true,
         "close_below_sma200": true,
-        "close_below_superTrend": true,
-        "previous_superTrend_below_close": false,
-        "current_superTrend_above_close": true,
-        "all_conditions": false
+        "previous_superTrend_in_range": true,
+        "all_conditions": true
       },
-      "matched_rows": []
+      "matched_rows": [
+        {
+          "stock": "COLPAL",
+          "at": "2026-10-30T09:15:00",
+          "interval": "5"
+        }
+      ]
     }
   ]
 }

@@ -107,6 +107,7 @@ def _timestamp_ist(value: Any) -> str:
 
 def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     high = row["high"]
+    low = row["low"]
     close = row["close"]
     indicators = {
         "sma20": row["sma20"],
@@ -114,37 +115,33 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "sma200": row["sma200"],
         "superTrend": row["superTrend"],
     }
-    available = high is not None and close is not None and all(
-        value is not None for value in indicators.values()
-    )
-    previous_close = row.get("previous_close")
     previous_supertrend = row.get("previous_superTrend")
+    available = (
+        high is not None
+        and low is not None
+        and close is not None
+        and previous_supertrend is not None
+        and all(
+            row[indicator] is not None for indicator in ("sma20", "sma50", "sma200")
+        )
+    )
     conditions = {
-        "high_above_sma20": available and high > indicators["sma20"],
-        "high_above_sma50": available and high > indicators["sma50"],
-        "high_above_sma200": available and high > indicators["sma200"],
-        "high_above_superTrend": available and high > indicators["superTrend"],
-        "close_below_sma20": available and close < indicators["sma20"],
-        "close_below_sma50": available and close < indicators["sma50"],
-        "close_below_sma200": available and close < indicators["sma200"],
-        "close_below_superTrend": available and close < indicators["superTrend"],
-        "previous_superTrend_below_close": (
-            previous_supertrend is not None
-            and close is not None
-            and previous_supertrend < close
-        ),
-        "current_superTrend_above_close": (
-            available and indicators["superTrend"] > close
+        "high_above_sma20": available and high > row["sma20"],
+        "high_above_sma50": available and high > row["sma50"],
+        "high_above_sma200": available and high > row["sma200"],
+        "close_below_sma20": available and close < row["sma20"],
+        "close_below_sma50": available and close < row["sma50"],
+        "close_below_sma200": available and close < row["sma200"],
+        "previous_superTrend_in_range": (
+            available and low <= previous_supertrend <= high
         ),
     }
     measured = {
-        "data_available": (
-            available and previous_supertrend is not None
-        ),
+        "data_available": available,
         "high": high,
+        "low": low,
         "close": close,
         **indicators,
-        "previous_close": previous_close,
         "previous_superTrend": previous_supertrend,
         **conditions,
         "all_conditions": all(conditions.values()),
@@ -305,7 +302,7 @@ def run_scan(
             day_start = datetime.combine(trading_day, time.min)
             day_end = day_start + timedelta(days=1)
             candle_result = client.query(
-                "SELECT stock, date, high, close, volume, vma20, "
+                "SELECT stock, date, high, low, close, volume, vma20, "
                 "sma20, sma50, sma200, superTrend "
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
@@ -331,6 +328,7 @@ def run_scan(
                             "stock",
                             "date",
                             "high",
+                            "low",
                             "close",
                             "volume",
                             "vma20",
@@ -348,7 +346,7 @@ def run_scan(
             previous_values: dict[str, Any] = {}
             if target_symbols:
                 previous_result = client.query(
-                    "SELECT stock, argMax(tuple(close, superTrend), date) "
+                    "SELECT stock, argMax(superTrend, date) "
                     "FROM stock__candles_data "
                     "WHERE interval = {interval:String} "
                     "AND stock IN {symbols:Array(String)} "
@@ -363,15 +361,12 @@ def run_scan(
                     },
                 )
                 previous_values = {
-                    str(stock): values
-                    for stock, values in previous_result.result_rows
+                    str(stock): value for stock, value in previous_result.result_rows
                 }
 
             day_matches = []
             for raw in raw_rows:
-                previous = previous_values.get(str(raw["stock"]))
-                raw["previous_close"] = previous[0] if previous is not None else None
-                raw["previous_superTrend"] = previous[1] if previous is not None else None
+                raw["previous_superTrend"] = previous_values.get(str(raw["stock"]))
                 matches, condition_values = _truth(raw)
                 normalized_date = _timestamp_ist(raw["date"])
                 if diagnostics is not None:
@@ -436,9 +431,9 @@ def run_scan(
                     "as_of": applied_as_of,
                     "criteria": (
                         "NIFTY 200 stocks; first 5-minute candle at 09:15 IST; "
-                        "high above SMA20, SMA50, SMA200 and current SuperTrend; "
-                        "close below all four indicators; previous SuperTrend "
-                        "below current close; highest liquidity per date using "
+                        "high above and close below SMA20, SMA50, and SMA200; "
+                        "previous SuperTrend within the candle low-to-high range; "
+                        "highest liquidity per date using "
                         f"{liquidity_days} prior trading sessions; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
