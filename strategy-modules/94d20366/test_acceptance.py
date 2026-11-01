@@ -12,7 +12,7 @@ from main import _truth, run_scan, scan
 FIXTURE_PATH = (
     Path(__file__).parent
     / "chart-evidence"
-    / "ab32211b0f08"
+    / "4f0d6bf4b23f"
     / "acceptance_cases.json"
 )
 with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:
@@ -23,7 +23,7 @@ IST = ZoneInfo(FIXTURE["timezone"])
 RESULTS = []
 
 
-def test_truth_matches_previous_to_current_supertrend_cross():
+def test_truth_matches_confirmed_supertrend_conditions():
     matches, conditions = _truth(
         {
             "high": 1628.0,
@@ -31,16 +31,16 @@ def test_truth_matches_previous_to_current_supertrend_cross():
             "sma20": 1622.08,
             "sma50": 1616.11,
             "sma200": 1608.22,
-            "superTrend": 1633.32,
+            "superTrend": 1625.0,
             "previous_close": 1630.1,
-            "previous_superTrend": 1623.36,
+            "previous_superTrend": 1590.0,
         }
     )
 
     assert matches
     assert conditions["data_available"] is True
-    assert conditions["high_above_previous_superTrend"] is True
-    assert conditions["previous_close_above_previous_superTrend"] is True
+    assert conditions["high_above_superTrend"] is True
+    assert conditions["previous_superTrend_below_close"] is True
     assert conditions["all_conditions"] is True
 
 
@@ -63,7 +63,7 @@ def test_truth_rejects_missing_previous_candle_data():
     assert conditions["all_conditions"] is False
 
 
-def test_truth_rejects_previous_supertrend_above_previous_close():
+def test_truth_rejects_previous_supertrend_above_current_close():
     matches, conditions = _truth(
         {
             "high": 1628.0,
@@ -71,14 +71,14 @@ def test_truth_rejects_previous_supertrend_above_previous_close():
             "sma20": 1622.08,
             "sma50": 1616.11,
             "sma200": 1608.22,
-            "superTrend": 1633.32,
-            "previous_close": 1620.0,
+            "superTrend": 1625.0,
+            "previous_close": 1630.1,
             "previous_superTrend": 1623.36,
         }
     )
 
     assert not matches
-    assert conditions["previous_close_above_previous_superTrend"] is False
+    assert conditions["previous_superTrend_below_close"] is False
     assert conditions["all_conditions"] is False
 
 
@@ -87,13 +87,7 @@ def test_truth_rejects_previous_supertrend_above_previous_close():
     CASES,
     ids=[f"{case['chart_id']}-{case['mark_id']}" for case in CASES],
 )
-def test_chart_acceptance(case, monkeypatch):
-    monkeypatch.setenv(
-        "CLICKHOUSE_HOST", os.getenv("CLICKHOUSE_HOST", "localhost")
-    )
-    monkeypatch.setenv(
-        "CLICKHOUSE_PASSWORD", os.getenv("CLICKHOUSE_PASSWORD", "acceptance")
-    )
+def test_chart_acceptance(case):
     at = datetime.fromtimestamp(case["at"], IST)
     target_time = at.strftime("%Y-%m-%dT%H:%M:%S")
     diagnostics = []
@@ -128,7 +122,9 @@ def test_chart_acceptance(case, monkeypatch):
     actual_rows = [
         row
         for row in rows
-        if row["stock"] == case["symbol"] and row["date"] == target_time
+        if row["stock"] == case["symbol"]
+        and row["date"] == target_time
+        and row["interval"] == case["interval"]
     ]
     expected_match = case["expect"] == "must_match"
     interval_checked = any(
@@ -166,9 +162,10 @@ def test_chart_acceptance(case, monkeypatch):
             "condition_values": condition_values,
             "matched_rows": [
                 {
-                    "stock": row["stock"],
-                    "at": row["date"],
-                    "interval": case["interval"],
+                    **row,
+                    "at": int(
+                        datetime.fromisoformat(row["date"]).replace(tzinfo=IST).timestamp()
+                    ),
                 }
                 for row in actual_rows
             ],
@@ -216,8 +213,7 @@ def write_acceptance_report(request):
         json.dumps(
             {
                 "command": (
-                    "CLICKHOUSE_HOST=localhost CLICKHOUSE_PASSWORD=acceptance "
-                    "pytest -q strategy-modules/94d20366/test_acceptance.py"
+                    "python -m pytest -vv test_acceptance.py"
                 ),
                 "summary": summary,
                 "exit_code": int(bool(failed or skipped)),

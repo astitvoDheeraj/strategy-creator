@@ -14,6 +14,7 @@ DEFAULT_INTERVAL = "5"
 FIRST_CANDLE_TIME = time(9, 15)
 DEFAULT_DAYS = 60
 MAX_DAYS = 90
+DEFAULT_LIQUIDITY_DAYS = 10
 COLUMNS = [
     {"key": "stock", "label": "Symbol", "format": "text"},
     {"key": "scan_date", "label": "Date", "format": "date"},
@@ -122,19 +123,15 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "high_above_sma20": available and high > indicators["sma20"],
         "high_above_sma50": available and high > indicators["sma50"],
         "high_above_sma200": available and high > indicators["sma200"],
-        "high_above_previous_superTrend": (
-            high is not None
-            and previous_supertrend is not None
-            and high > previous_supertrend
-        ),
+        "high_above_superTrend": available and high > indicators["superTrend"],
         "close_below_sma20": available and close < indicators["sma20"],
         "close_below_sma50": available and close < indicators["sma50"],
         "close_below_sma200": available and close < indicators["sma200"],
         "close_below_superTrend": available and close < indicators["superTrend"],
-        "previous_close_above_previous_superTrend": (
+        "previous_superTrend_below_close": (
             previous_supertrend is not None
-            and previous_close is not None
-            and previous_close > previous_supertrend
+            and close is not None
+            and previous_supertrend < close
         ),
         "current_superTrend_above_close": (
             available and indicators["superTrend"] > close
@@ -142,7 +139,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     }
     measured = {
         "data_available": (
-            available and previous_close is not None and previous_supertrend is not None
+            available and previous_supertrend is not None
         ),
         "high": high,
         "close": close,
@@ -155,6 +152,43 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     return all(conditions.values()), measured
 
 
+def _highest_liquidity(client, matches, trading_day, liquidity_days):
+    if len(matches) <= 1:
+        return matches
+    result = client.query(
+        "SELECT stock, count(daily_range) AS sessions, avg(daily_volume) AS avg_volume, "
+        "avg(daily_range) AS volatility FROM ("
+        "SELECT stock, volume AS daily_volume, "
+        "(high - low) / nullIf(close, 0) AS daily_range "
+        "FROM stock__candles_data "
+        "WHERE interval = 'daily' "
+        "AND stock IN {symbols:Array(String)} "
+        "AND date < toDateTime({day_start:String}) "
+        "ORDER BY stock, date DESC LIMIT {days:UInt32} BY stock"
+        ") GROUP BY stock",
+        parameters={
+            "symbols": [row["stock"] for row in matches],
+            "day_start": datetime.combine(trading_day, time.min).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "days": liquidity_days,
+        },
+    )
+    scores = {}
+    for stock, sessions, avg_volume, volatility in result.result_rows:
+        if sessions != liquidity_days or volatility is None:
+            raise ScanParameterError(
+                f"Insufficient liquidity history for {stock}: "
+                f"need {liquidity_days} prior trading sessions"
+            )
+        scores[str(stock)] = avg_volume / (1 + volatility)
+    if any(row["stock"] not in scores for row in matches):
+        raise ScanParameterError("Missing liquidity history for qualifying stocks")
+    return [
+        max(matches, key=lambda row: (scores[row["stock"]], row["volume"], row["stock"]))
+    ]
+
+
 def run_scan(
     params: dict[str, Any],
     diagnostics: list[dict[str, Any]] | None = None,
@@ -164,6 +198,8 @@ def run_scan(
     if not interval:
         raise ScanParameterError("interval must not be empty")
     as_of = _parse_as_of(params.get("as_of"))
+    if params.get("as_of") is None:
+        as_of -= timedelta(minutes=5)
     requested_symbols = params.get("symbols")
     if isinstance(requested_symbols, str):
         requested_symbols = [
@@ -197,6 +233,12 @@ def run_scan(
         raise ScanParameterError("limit must be an integer") from exc
     if limit < 0:
         raise ScanParameterError("limit must be zero or a positive integer")
+    try:
+        liquidity_days = int(params.get("liquidity_days", DEFAULT_LIQUIDITY_DAYS))
+    except (TypeError, ValueError) as exc:
+        raise ScanParameterError("liquidity_days must be an integer") from exc
+    if not 1 <= liquidity_days <= MAX_DAYS:
+        raise ScanParameterError("liquidity_days must be between 1 and 90")
 
     client = _client()
     try:
@@ -346,6 +388,7 @@ def run_scan(
                     day_matches.append(
                         {
                             "stock": str(raw["stock"]),
+                            "interval": interval,
                             "scan_date": normalized_date[:10],
                             "close": raw["close"],
                             "volume": raw["volume"],
@@ -357,6 +400,9 @@ def run_scan(
                             "superTrend": raw["superTrend"],
                         }
                     )
+            day_matches = _highest_liquidity(
+                client, day_matches, trading_day, liquidity_days
+            )
             reverse = sort_dir == "desc"
             day_matches.sort(
                 key=lambda row: (
@@ -390,9 +436,10 @@ def run_scan(
                     "as_of": applied_as_of,
                     "criteria": (
                         "NIFTY 200 stocks; first 5-minute candle at 09:15 IST; "
-                        "high above SMA20, SMA50, SMA200 and the previous "
-                        "SuperTrend, with the previous close above its SuperTrend "
-                        "and current SuperTrend above close; "
+                        "high above SMA20, SMA50, SMA200 and current SuperTrend; "
+                        "close below all four indicators; previous SuperTrend "
+                        "below current close; highest liquidity per date using "
+                        f"{liquidity_days} prior trading sessions; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
                     ),
@@ -418,6 +465,7 @@ def scan(
     limit: str = "10",
     sort_by: str | None = None,
     sort_dir: str | None = None,
+    liquidity_days: str = str(DEFAULT_LIQUIDITY_DAYS),
 ):
     params = {
         "from_date": from_date,
@@ -428,6 +476,7 @@ def scan(
         "limit": limit,
         "sort_by": sort_by,
         "sort_dir": sort_dir,
+        "liquidity_days": liquidity_days,
     }
     try:
         date_range: dict[str, Any] = {}
@@ -442,7 +491,13 @@ def scan(
         "criteria": date_range["criteria"],
         "columns": COLUMNS,
         "presentation": PRESENTATION,
-        "parameters": [],
+        "parameters": [
+            {
+                "key": "liquidity_days",
+                "default": DEFAULT_LIQUIDITY_DAYS,
+                "label": "Liquidity lookback (trading sessions)",
+            }
+        ],
         "date_range": {
             "mode": "range",
             "from_date": date_range["from_date"],

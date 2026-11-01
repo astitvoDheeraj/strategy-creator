@@ -1,7 +1,7 @@
 {
-  "command": "CLICKHOUSE_HOST=localhost CLICKHOUSE_PASSWORD=acceptance pytest -q strategy-modules/94d20366/test_acceptance.py",
-  "summary": "7 passed, 0 failed, 0 skipped",
-  "exit_code": 0,
+  "command": "python -m pytest -vv test_acceptance.py",
+  "summary": "6 passed, 1 failed, 0 skipped",
+  "exit_code": 1,
   "cases": [
     {
       "chart_id": "clmvwb7pfxe",
@@ -10,8 +10,8 @@
       "interval": "5",
       "at": 1793331900,
       "expected": "must_match",
-      "passed": true,
-      "matched": true,
+      "passed": false,
+      "matched": false,
       "condition_values": {
         "data_available": true,
         "high": 1628.0,
@@ -25,22 +25,16 @@
         "high_above_sma20": true,
         "high_above_sma50": true,
         "high_above_sma200": true,
-        "high_above_previous_superTrend": true,
+        "high_above_superTrend": false,
         "close_below_sma20": true,
         "close_below_sma50": true,
         "close_below_sma200": true,
         "close_below_superTrend": true,
-        "previous_close_above_previous_superTrend": true,
+        "previous_superTrend_below_close": false,
         "current_superTrend_above_close": true,
-        "all_conditions": true
+        "all_conditions": false
       },
-      "matched_rows": [
-        {
-          "stock": "COLPAL",
-          "at": "2026-10-30T09:15:00",
-          "interval": "5"
-        }
-      ]
+      "matched_rows": []
     }
   ]
 }
