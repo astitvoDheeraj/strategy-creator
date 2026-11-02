@@ -144,12 +144,16 @@ class Client:
         self.sessions = sessions
         self.queries = []
         self.closed = False
+        self.universes = {
+            "nifty_200": ["AAA", "BBB"],
+            "nifty_500": ["AAA", "CCC"],
+        }
         self.trading_dates = [date(2026, 10, 30), date(2026, 10, 29)]
 
     def query(self, sql, parameters=None):
         self.queries.append((sql, parameters))
         if "universe_members" in sql:
-            rows = [("AAA",), ("BBB",)]
+            rows = [(stock,) for stock in self.universes.get(parameters["universe"], [])]
         elif "SELECT DISTINCT toDate" in sql:
             rows = [(day,) for day in self.trading_dates]
         elif "SELECT stock, date, high" in sql:
@@ -169,7 +173,7 @@ class Client:
                     103.0,
                     105.0,
                 )
-                for stock, volume in [("AAA", 1000), ("BBB", 100)]
+                for stock, volume in [("AAA", 1000), ("BBB", 100), ("CCC", 200)]
                 if stock in parameters["symbols"]
                 and target <= datetime.fromisoformat(parameters["as_of"])
             ]
@@ -179,6 +183,7 @@ class Client:
             rows = [
                 ("AAA", self.sessions, 1000.0, 0.5),
                 ("BBB", self.sessions, 1000.0, 0.01),
+                ("CCC", self.sessions, 2000.0, 0.01),
             ]
         else:
             raise AssertionError(sql)
@@ -250,6 +255,105 @@ def test_single_match_skips_liquidity_and_intersects_live_universe(monkeypatch):
         for _, params in client.queries
         if params and "symbols" in params
     )
+
+
+@pytest.mark.parametrize(
+    "selection,expected",
+    [
+        ({}, "BBB"),
+        ({"universe": "nifty_500"}, "CCC"),
+        ({"universe": " nifty_500 "}, "CCC"),
+    ],
+)
+def test_universe_selects_live_members(monkeypatch, selection, expected):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    metadata = {}
+    rows = main.run_scan(
+        {"as_of": "2026-10-30T09:15", **selection}, metadata=metadata
+    )
+    universe = selection.get("universe", "nifty_200").strip()
+    sql, parameters = client.queries[0]
+    assert "universe_id = {universe:String} AND active = 1" in sql
+    assert parameters == {"universe": universe}
+    assert [row["stock"] for row in rows] == [expected, expected]
+    assert all(
+        set(parameters["symbols"]) <= set(client.universes[universe])
+        for _, parameters in client.queries
+        if "symbols" in parameters
+    )
+    assert metadata["criteria"].startswith(
+        f"{'NIFTY 200' if universe == 'nifty_200' else universe} stocks;"
+    )
+    assert client.closed
+
+
+def test_custom_universe_intersects_requested_symbols(monkeypatch):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    rows = main.run_scan(
+        {"universe": "nifty_500", "symbols": "BBB,CCC", "as_of": "2026-10-30T09:15"}
+    )
+    assert [row["stock"] for row in rows] == ["CCC", "CCC"]
+    assert not any("daily_volume" in sql for sql, _ in client.queries)
+
+
+@pytest.mark.parametrize("universe", ["", "  ", None, 123, ["nifty_500"]])
+def test_invalid_universe_is_rejected_before_connecting(monkeypatch, universe):
+    def unexpected_client():
+        pytest.fail("Invalid universe must not open a database connection")
+
+    monkeypatch.setattr(main, "_client", unexpected_client)
+    with pytest.raises(main.ScanParameterError, match="non-empty universe ID"):
+        main.run_scan({"universe": universe})
+
+
+@pytest.mark.parametrize("universe", ["unknown", "empty", "nifty_500' OR 1=1 --"])
+def test_unavailable_universe_returns_bad_request_and_is_bound(monkeypatch, universe):
+    client = Client()
+    client.universes["empty"] = []
+    monkeypatch.setattr(main, "_client", lambda: client)
+    with TestClient(main.app) as api:
+        response = api.get("/strategy-api/94d20366/scan", params={"universe": universe})
+    assert response.status_code == 400
+    assert response.json() == {
+        "success": False,
+        "error": f"The {universe} universe has no active members",
+    }
+    sql, parameters = client.queries[0]
+    assert universe not in sql
+    assert parameters == {"universe": universe}
+    assert len(client.queries) == 1
+    assert client.closed
+
+
+def test_symbols_outside_selected_universe_return_bad_request(monkeypatch):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    response = main.scan(universe="nifty_500", symbols="BBB")
+    assert response.status_code == 400
+    assert b"No requested symbols are active members of nifty_500" in response.body
+    assert client.closed
+
+
+def test_api_accepts_and_exposes_universe_parameter(monkeypatch):
+    monkeypatch.setattr(main, "_client", Client)
+    with TestClient(main.app) as api:
+        response = api.get(
+            "/strategy-api/94d20366/scan",
+            params={"universe": "nifty_500", "as_of": "2026-10-30T09:15"},
+        )
+        invalid = api.get("/strategy-api/94d20366/scan", params={"universe": ""})
+        assert invalid.status_code == 400
+    assert response.status_code == 200
+    data = response.json()
+    assert data["criteria"].startswith("nifty_500 stocks;")
+    assert [row["stock"] for row in data["matches"]] == ["CCC", "CCC"]
+    assert {
+        "key": "universe", "default": "nifty_200", "label": "Universe ID"
+    } in data["parameters"]
+    assert data["presentation"]["group_by_date"] is False
+    assert data["presentation"]["date_chips"] is False
 
 
 @pytest.mark.parametrize("invalid_symbols", [{"BBB"}, {"AAA", "BBB"}])
