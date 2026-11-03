@@ -146,6 +146,8 @@ class Client:
         self.closed = False
         self.universes = {
             "nifty_200": ["AAA", "BBB"],
+            "nifty_50": ["AAA"],
+            "nifty_100": ["AAA", "BBB"],
             "nifty_500": ["AAA", "CCC"],
         }
         self.trading_dates = [date(2026, 10, 30), date(2026, 10, 29)]
@@ -153,7 +155,14 @@ class Client:
     def query(self, sql, parameters=None):
         self.queries.append((sql, parameters))
         if "universe_members" in sql:
-            rows = [(stock,) for stock in self.universes.get(parameters["universe"], [])]
+            rows = [
+                (stock,)
+                for stock in dict.fromkeys(
+                    stock
+                    for universe in parameters["universes"]
+                    for stock in self.universes.get(universe, [])
+                )
+            ]
         elif "SELECT DISTINCT toDate" in sql:
             rows = [(day,) for day in self.trading_dates]
         elif "SELECT stock, date, high" in sql:
@@ -174,7 +183,10 @@ class Client:
                     105.0,
                 )
                 for stock, volume in [("AAA", 1000), ("BBB", 100), ("CCC", 200)]
-                if stock in parameters["symbols"]
+                if (
+                    "symbols" not in parameters
+                    or stock in parameters["symbols"]
+                )
                 and target <= datetime.fromisoformat(parameters["as_of"])
             ]
         elif "SELECT stock, superTrend, volume" in sql:
@@ -263,6 +275,7 @@ def test_single_match_skips_liquidity_and_intersects_live_universe(monkeypatch):
         ({}, "BBB"),
         ({"universe": "nifty_500"}, "CCC"),
         ({"universe": " nifty_500 "}, "CCC"),
+        ({"universe": "nifty_50,nifty_100"}, "BBB"),
     ],
 )
 def test_universe_selects_live_members(monkeypatch, selection, expected):
@@ -272,20 +285,70 @@ def test_universe_selects_live_members(monkeypatch, selection, expected):
     rows = main.run_scan(
         {"as_of": "2026-10-30T09:15", **selection}, metadata=metadata
     )
-    universe = selection.get("universe", "nifty_200").strip()
+    universes = selection.get("universe", "nifty_200").strip().split(",")
     sql, parameters = client.queries[0]
-    assert "universe_id = {universe:String} AND active = 1" in sql
-    assert parameters == {"universe": universe}
+    assert "universe_id IN {universes:Array(String)} AND active = 1" in sql
+    assert parameters == {"universes": universes}
     assert [row["stock"] for row in rows] == [expected, expected]
     assert all(
-        set(parameters["symbols"]) <= set(client.universes[universe])
+        set(parameters["symbols"])
+        <= set().union(*(set(client.universes[universe]) for universe in universes))
         for _, parameters in client.queries
         if "symbols" in parameters
     )
     assert metadata["criteria"].startswith(
-        f"{'NIFTY 200' if universe == 'nifty_200' else universe} stocks;"
+        f"{', '.join(main.UNIVERSE_OPTIONS[universe] for universe in universes)} stocks;"
     )
     assert client.closed
+
+
+@pytest.mark.parametrize("universe", ["all", ""])
+def test_all_or_empty_universe_skips_membership_query(monkeypatch, universe):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    rows = main.run_scan(
+        {"universe": universe, "as_of": "2026-10-30T09:15"},
+    )
+    assert [row["stock"] for row in rows] == ["CCC", "CCC"]
+    assert not any("universe_members" in sql for sql, _ in client.queries)
+    assert all(
+        "symbols" not in parameters
+        for sql, parameters in client.queries
+        if "SELECT DISTINCT toDate" in sql or "SELECT stock, date, high" in sql
+    )
+
+
+def test_all_universe_applies_requested_symbol_filter(monkeypatch):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    rows = main.run_scan(
+        {
+            "universe": "all",
+            "symbols": "BBB,CCC",
+            "as_of": "2026-10-30T09:15",
+        }
+    )
+    assert [row["stock"] for row in rows] == ["CCC", "CCC"]
+    assert not any("universe_members" in sql for sql, _ in client.queries)
+    assert all(
+        parameters["symbols"] == ["BBB", "CCC"]
+        for sql, parameters in client.queries
+        if "SELECT DISTINCT toDate" in sql or "SELECT stock, date, high" in sql
+    )
+
+
+@pytest.mark.parametrize("universe", ["unknown", "nifty_50,unknown"])
+def test_unknown_universe_falls_back_to_default(monkeypatch, universe):
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    metadata = {}
+    rows = main.run_scan(
+        {"universe": universe, "as_of": "2026-10-30T09:15"},
+        metadata=metadata,
+    )
+    assert [row["stock"] for row in rows] == ["BBB", "BBB"]
+    assert client.queries[0][1] == {"universes": ["nifty_200"]}
+    assert metadata["criteria"].startswith("NIFTY 200 stocks;")
 
 
 def test_custom_universe_intersects_requested_symbols(monkeypatch):
@@ -298,31 +361,22 @@ def test_custom_universe_intersects_requested_symbols(monkeypatch):
     assert not any("daily_volume" in sql for sql, _ in client.queries)
 
 
-@pytest.mark.parametrize("universe", ["", "  ", None, 123, ["nifty_500"]])
-def test_invalid_universe_is_rejected_before_connecting(monkeypatch, universe):
-    def unexpected_client():
-        pytest.fail("Invalid universe must not open a database connection")
-
-    monkeypatch.setattr(main, "_client", unexpected_client)
-    with pytest.raises(main.ScanParameterError, match="non-empty universe ID"):
-        main.run_scan({"universe": universe})
-
-
-@pytest.mark.parametrize("universe", ["unknown", "empty", "nifty_500' OR 1=1 --"])
-def test_unavailable_universe_returns_bad_request_and_is_bound(monkeypatch, universe):
+def test_valid_universe_without_active_members_returns_bad_request(monkeypatch):
     client = Client()
-    client.universes["empty"] = []
+    client.universes["nifty_200"] = []
     monkeypatch.setattr(main, "_client", lambda: client)
     with TestClient(main.app) as api:
-        response = api.get("/strategy-api/94d20366/scan", params={"universe": universe})
+        response = api.get(
+            "/strategy-api/94d20366/scan", params={"universe": "nifty_200"}
+        )
     assert response.status_code == 400
     assert response.json() == {
         "success": False,
-        "error": f"The {universe} universe has no active members",
+        "error": "The nifty_200 universe has no active members",
     }
     sql, parameters = client.queries[0]
-    assert universe not in sql
-    assert parameters == {"universe": universe}
+    assert "nifty_200" not in sql
+    assert parameters == {"universes": ["nifty_200"]}
     assert len(client.queries) == 1
     assert client.closed
 
@@ -336,6 +390,25 @@ def test_symbols_outside_selected_universe_return_bad_request(monkeypatch):
     assert client.closed
 
 
+def test_api_exposes_multi_value_universe_choices(monkeypatch):
+    monkeypatch.setattr(main, "_client", Client)
+    with TestClient(main.app) as api:
+        response = api.get(
+            "/strategy-api/94d20366/scan",
+            params={"universe": "nifty_50,nifty_100", "as_of": "2026-10-30T09:15"},
+        )
+    assert response.status_code == 200
+    parameter = next(
+        item for item in response.json()["parameters"] if item["key"] == "universe"
+    )
+    assert parameter["default"] == "nifty_200"
+    assert parameter["multi"] is True
+    assert parameter["options"] == [
+        {"value": value, "label": label}
+        for value, label in main.UNIVERSE_OPTIONS.items()
+    ]
+
+
 def test_api_accepts_and_exposes_universe_parameter(monkeypatch):
     monkeypatch.setattr(main, "_client", Client)
     with TestClient(main.app) as api:
@@ -343,15 +416,10 @@ def test_api_accepts_and_exposes_universe_parameter(monkeypatch):
             "/strategy-api/94d20366/scan",
             params={"universe": "nifty_500", "as_of": "2026-10-30T09:15"},
         )
-        invalid = api.get("/strategy-api/94d20366/scan", params={"universe": ""})
-        assert invalid.status_code == 400
     assert response.status_code == 200
     data = response.json()
-    assert data["criteria"].startswith("nifty_500 stocks;")
+    assert data["criteria"].startswith("NIFTY 500 stocks;")
     assert [row["stock"] for row in data["matches"]] == ["CCC", "CCC"]
-    assert {
-        "key": "universe", "default": "nifty_200", "label": "Universe ID"
-    } in data["parameters"]
     assert data["presentation"]["group_by_date"] is False
     assert data["presentation"]["date_chips"] is False
 

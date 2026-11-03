@@ -12,6 +12,20 @@ JOB_ID = "94d20366"
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_INTERVAL = "5"
 DEFAULT_UNIVERSE = "nifty_200"
+UNIVERSE_OPTIONS = {
+    "nifty_200": "NIFTY 200",
+    "nifty_50": "NIFTY 50",
+    "nifty_next_50": "NIFTY NEXT 50",
+    "nifty_100": "NIFTY 100",
+    "nifty_500": "NIFTY 500",
+    "nifty_midcap_50": "NIFTY MIDCAP 50",
+    "nifty_midcap_100": "NIFTY MIDCAP 100",
+    "nifty_midcap_150": "NIFTY MIDCAP 150",
+    "nifty_smallcap_50": "NIFTY SMALLCAP 50",
+    "nifty_smallcap_100": "NIFTY SMALLCAP 100",
+    "nifty_smallcap_250": "NIFTY SMALLCAP 250",
+    "all": "All NSE stocks",
+}
 FIRST_CANDLE_TIME = time(9, 15)
 DEFAULT_DAYS = 60
 MAX_DAYS = 90
@@ -263,10 +277,36 @@ def run_scan(
     interval = str(params.get("interval") or DEFAULT_INTERVAL)
     if interval != DEFAULT_INTERVAL:
         raise ScanParameterError("interval must be 5")
-    universe = params.get("universe", DEFAULT_UNIVERSE)
-    if not isinstance(universe, str) or not universe.strip():
-        raise ScanParameterError("universe must be a non-empty universe ID")
-    universe = universe.strip()
+    universe_value = params.get("universe", DEFAULT_UNIVERSE)
+    if universe_value is None:
+        universe_value = DEFAULT_UNIVERSE
+    if not isinstance(universe_value, str):
+        universe_value = DEFAULT_UNIVERSE
+    universe_value = universe_value.strip()
+    if not universe_value:
+        universes = []
+    else:
+        requested_universes = list(
+            dict.fromkeys(
+                universe_id.strip()
+                for universe_id in universe_value.split(",")
+                if universe_id.strip()
+            )
+        )
+        if any(
+            universe_id not in UNIVERSE_OPTIONS
+            for universe_id in requested_universes
+        ):
+            requested_universes = [DEFAULT_UNIVERSE]
+        universes = [] if "all" in requested_universes else requested_universes
+    universe_description = (
+        "All NSE stocks"
+        if not universes
+        else (
+            ", ".join(UNIVERSE_OPTIONS[universe_id] for universe_id in universes)
+            + " stocks"
+        )
+    )
     as_of = _parse_as_of(params.get("as_of"))
     if params.get("as_of") is None:
         as_of -= timedelta(minutes=5)
@@ -312,35 +352,54 @@ def run_scan(
 
     client = _client()
     try:
-        universe_result = client.query(
-            "SELECT DISTINCT symbol FROM universe_members FINAL "
-            "WHERE universe_id = {universe:String} AND active = 1",
-            parameters={"universe": universe},
-        )
-        universe_symbols = [str(row[0]) for row in universe_result.result_rows]
-        if not universe_symbols:
-            raise ScanParameterError(f"The {universe} universe has no active members")
-        if requested_symbols is not None:
-            requested = set(requested_symbols)
-            universe_symbols = [
-                symbol for symbol in universe_symbols if symbol in requested
-            ]
+        universe_symbols: list[str] | None = None
+        if universes:
+            universe_result = client.query(
+                "SELECT DISTINCT symbol FROM universe_members FINAL "
+                "WHERE universe_id IN {universes:Array(String)} AND active = 1",
+                parameters={"universes": universes},
+            )
+            universe_symbols = list(
+                dict.fromkeys(str(row[0]) for row in universe_result.result_rows)
+            )
             if not universe_symbols:
                 raise ScanParameterError(
-                    f"No requested symbols are active members of {universe}"
+                    f"The {', '.join(universes)} universe has no active members"
                 )
+        if requested_symbols is not None:
+            requested = set(requested_symbols)
+            if universe_symbols is None:
+                universe_symbols = requested_symbols
+            else:
+                universe_symbols = [
+                    symbol for symbol in universe_symbols if symbol in requested
+                ]
+                if not universe_symbols:
+                    raise ScanParameterError(
+                        f"No requested symbols are active members of "
+                        f"{', '.join(universes)}"
+                    )
+
+        symbol_filter = (
+            "AND stock IN {symbols:Array(String)} "
+            if universe_symbols is not None
+            else ""
+        )
+        symbol_parameters = (
+            {"symbols": universe_symbols} if universe_symbols is not None else {}
+        )
 
         as_of_text = as_of.strftime("%Y-%m-%d %H:%M:%S")
         date_result = client.query(
             "SELECT DISTINCT toDate(date) AS trading_date "
             "FROM stock__candles_data "
             "WHERE interval = {interval:String} "
-            "AND stock IN {symbols:Array(String)} "
+            f"{symbol_filter}"
             "AND date <= toDateTime({as_of:String}) "
             "ORDER BY trading_date DESC",
             parameters={
+                **symbol_parameters,
                 "interval": interval,
-                "symbols": universe_symbols,
                 "as_of": as_of_text,
             },
         )
@@ -379,13 +438,13 @@ def run_scan(
                 "sma20, sma50, sma200, superTrend, open "
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
-                "AND stock IN {symbols:Array(String)} "
+                f"{symbol_filter}"
                 "AND date = toDateTime({candle_time:String}) "
                 "AND date <= toDateTime({as_of:String}) "
                 "ORDER BY date, stock",
                 parameters={
+                    **symbol_parameters,
                     "interval": interval,
-                    "symbols": universe_symbols,
                     "candle_time": candle_time.strftime("%Y-%m-%d %H:%M:%S"),
                     "as_of": as_of_text,
                 },
@@ -495,7 +554,7 @@ def run_scan(
                     ],
                     "as_of": applied_as_of,
                     "criteria": (
-                        f"{'NIFTY 200' if universe == DEFAULT_UNIVERSE else universe} stocks; "
+                        f"{universe_description}; "
                         "only the completed 09:15 IST 5-minute candle; "
                         "short: high above and close below SMA20, SMA50, and SMA200; "
                         "long: bullish body opening below and closing above all three "
@@ -570,7 +629,12 @@ def scan(
             {
                 "key": "universe",
                 "default": DEFAULT_UNIVERSE,
-                "label": "Universe ID",
+                "label": "Universe",
+                "multi": True,
+                "options": [
+                    {"value": value, "label": label}
+                    for value, label in UNIVERSE_OPTIONS.items()
+                ],
             },
         ],
         "date_range": {
