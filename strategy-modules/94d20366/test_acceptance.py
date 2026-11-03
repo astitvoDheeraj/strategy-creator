@@ -14,7 +14,7 @@ from main import _truth, run_scan, scan
 FIXTURE_PATH = (
     Path(__file__).parent
     / "chart-evidence"
-    / "cbcf05d6839f"
+    / "acf25943f83c"
     / "acceptance_cases.json"
 )
 with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:

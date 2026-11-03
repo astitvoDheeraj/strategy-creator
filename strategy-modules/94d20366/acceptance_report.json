@@ -44,11 +44,14 @@
         },
         "short_signal": true,
         "long_signal": false,
+        "signal": "SHORT",
+        "direction": "SELL",
         "all_conditions": true
       },
       "matched_rows": [
         {
           "stock": "COLPAL",
+          "direction": "SELL",
           "interval": "5",
           "scan_date": "2026-10-30",
           "close": 1598.3,
@@ -59,6 +62,7 @@
           "sma50": 1616.11,
           "sma200": 1608.22,
           "superTrend": 1633.32,
+          "signal": "SHORT",
           "at": 1793331900
         }
       ]
@@ -104,11 +108,14 @@
         },
         "short_signal": false,
         "long_signal": true,
+        "signal": "LONG",
+        "direction": "BUY",
         "all_conditions": true
       },
       "matched_rows": [
         {
           "stock": "BAJFINANCE",
+          "direction": "BUY",
           "interval": "5",
           "scan_date": "2026-10-13",
           "close": 961.5,
@@ -119,6 +126,7 @@
           "sma50": 958.9889999999999,
           "sma200": 959.27,
           "superTrend": 953.2581004559636,
+          "signal": "LONG",
           "at": 1791863100
         }
       ]
