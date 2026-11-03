@@ -1,0 +1,5 @@
+{
+  "job_id": "deb31fcc",
+  "api_path": "/strategy-api/deb31fcc",
+  "prompt": "Create a screener for NIFTY 50 stocks using 5-minute candles. The conditions are that the first 5-minute candle must cross above the SMA 20, SMA 50, and SMA 200 moving averages. Exclude illiquid stocks. Display results in a compact table with columns for Symbol, Last price (LTP), SMA 20, SMA 50, SMA 200, ATR, MACD signal, Low, and Candle time. Sort results by Last price (LTP) descending, showing at most 50 stocks with pagination set to 20 per page. The universe is a configurable, multi-value runtime parameter defaulting to nifty_50; supported values are nifty_50, nifty_next_50, nifty_100, nifty_200, nifty_500, nifty_midcap_50, nifty_midcap_100, nifty_midcap_150, nifty_smallcap_50, nifty_smallcap_100, nifty_smallcap_250, and all. Multiple universe IDs scan their union; all or an empty value scans all NSE stocks. Unknown IDs fall back to nifty_50."
+}
