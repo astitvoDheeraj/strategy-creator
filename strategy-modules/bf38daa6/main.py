@@ -13,6 +13,21 @@ IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_INTERVAL = "weekly"
 DEFAULT_DAYS = 60
 MAX_DAYS = 90
+DEFAULT_UNIVERSE = "nifty_500"
+UNIVERSE_OPTIONS = [
+    {"value": "nifty_500", "label": "NIFTY 500"},
+    {"value": "nifty_50", "label": "NIFTY 50"},
+    {"value": "nifty_next_50", "label": "NIFTY NEXT 50"},
+    {"value": "nifty_100", "label": "NIFTY 100"},
+    {"value": "nifty_200", "label": "NIFTY 200"},
+    {"value": "nifty_midcap_50", "label": "NIFTY MIDCAP 50"},
+    {"value": "nifty_midcap_100", "label": "NIFTY MIDCAP 100"},
+    {"value": "nifty_midcap_150", "label": "NIFTY MIDCAP 150"},
+    {"value": "nifty_smallcap_50", "label": "NIFTY SMALLCAP 50"},
+    {"value": "nifty_smallcap_100", "label": "NIFTY SMALLCAP 100"},
+    {"value": "nifty_smallcap_250", "label": "NIFTY SMALLCAP 250"},
+    {"value": "all", "label": "All NSE stocks"},
+]
 COLUMNS = [
     {"key": "stock", "label": "Symbol", "format": "text"},
     {"key": "scan_date", "label": "Date", "format": "date"},
@@ -34,8 +49,8 @@ PRESENTATION = {
 }
 DIRECTION = {
     "enabled": True,
-    "buy": "",
-    "sell": "",
+    "buy": "close > SuperTrend and low <= SuperTrend",
+    "sell": "Not applicable",
     "neutral": "Matches neither the BUY rule nor the SELL rule",
 }
 
@@ -128,6 +143,18 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     }
 
 
+def _parse_universe(value: str | None) -> list[str]:
+    if value is None:
+        value = DEFAULT_UNIVERSE
+    universe_ids = list(dict.fromkeys(item.strip() for item in value.split(",")))
+    allowed = {option["value"] for option in UNIVERSE_OPTIONS}
+    if any(item and item not in allowed for item in universe_ids):
+        return [DEFAULT_UNIVERSE]
+    if "all" in universe_ids or not any(universe_ids):
+        return []
+    return [item for item in universe_ids if item]
+
+
 def run_scan(
     params: dict[str, Any],
     diagnostics: list[dict[str, Any]] | None = None,
@@ -138,6 +165,12 @@ def run_scan(
     if not interval:
         raise ScanParameterError("interval must not be empty")
     as_of = _parse_as_of(params.get("as_of"))
+    universe_ids = _parse_universe(params.get("universe"))
+    universe_label = ", ".join(
+        option["label"]
+        for option in UNIVERSE_OPTIONS
+        if option["value"] in (universe_ids or ["all"])
+    )
     requested_symbols = params.get("symbols")
     if isinstance(requested_symbols, str):
         requested_symbols = [
@@ -175,34 +208,52 @@ def run_scan(
 
     client = _client()
     try:
-        universe_result = client.query(
-            "SELECT DISTINCT symbol FROM universe_members FINAL "
-            "WHERE universe_id IN ('nifty_500') AND active = 1"
-        )
-        universe_symbols = [str(row[0]) for row in universe_result.result_rows]
-        if not universe_symbols:
-            raise ScanParameterError("The nifty_500 universe has no active members")
-        if requested_symbols is not None:
+        universe_symbols = None
+        if universe_ids:
+            universe_result = client.query(
+                "SELECT DISTINCT symbol FROM universe_members FINAL "
+                "WHERE universe_id IN {universe_ids:Array(String)} AND active = 1",
+                parameters={"universe_ids": universe_ids},
+            )
+            universe_symbols = sorted(
+                {str(row[0]) for row in universe_result.result_rows}
+            )
+            if not universe_symbols:
+                raise ScanParameterError(
+                    "The selected universe has no active members"
+                )
+        if requested_symbols is not None and universe_symbols is not None:
             requested = set(requested_symbols)
             universe_symbols = [
                 symbol for symbol in universe_symbols if symbol in requested
             ]
             if not universe_symbols:
                 raise ScanParameterError(
-                    "No requested symbols are active members of nifty_500"
+                    "No requested symbols are active members of the selected universe"
                 )
+        elif requested_symbols is not None:
+            universe_symbols = sorted(set(requested_symbols))
+
+        symbol_filter = (
+            "AND stock IN {symbols:Array(String)} "
+            if universe_symbols is not None
+            else ""
+        )
+        symbol_params = (
+            {"symbols": universe_symbols} if universe_symbols is not None else {}
+        )
 
         as_of_text = as_of.strftime("%Y-%m-%d %H:%M:%S")
         date_result = client.query(
             "SELECT DISTINCT toDate(date) AS trading_date "
             "FROM stock__candles_data "
             "WHERE interval = {interval:String} "
-            "AND stock IN {symbols:Array(String)} "
+            f"{symbol_filter}"
             "AND date <= toDateTime({as_of:String}) "
             "ORDER BY trading_date DESC",
             parameters={
                 "interval": interval,
-                "symbols": universe_symbols,
+                **symbol_params,
                 "as_of": as_of_text,
             },
         )
@@ -241,14 +292,14 @@ def run_scan(
                 "SELECT stock, date, close, low, volume, superTrend "
                 "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
-                "AND stock IN {symbols:Array(String)} "
+                f"{symbol_filter}"
                 "AND date >= toDateTime({day_start:String}) "
                 "AND date < toDateTime({day_end:String}) "
                 "AND date <= toDateTime({as_of:String}) "
                 "ORDER BY stock, date",
                 parameters={
                     "interval": interval,
-                    "symbols": universe_symbols,
+                    **symbol_params,
                     "day_start": day_start.strftime("%Y-%m-%d %H:%M:%S"),
                     "day_end": day_end.strftime("%Y-%m-%d %H:%M:%S"),
                     "as_of": as_of_text,
@@ -282,6 +333,7 @@ def run_scan(
                             "close": raw["close"],
                             "volume": raw["volume"],
                             "date": normalized_date,
+                            "interval": interval,
                         }
                     )
             total += len(day_matches)
@@ -312,8 +364,9 @@ def run_scan(
                         day.isoformat() for day in sorted(applied_dates, reverse=True)
                     ],
                     "as_of": applied_as_of,
+                    "universe": ",".join(universe_ids) if universe_ids else "all",
                     "criteria": (
-                        "NIFTY 500; weekly candles; close > SuperTrend and "
+                        f"{universe_label}; {interval} candles; close > SuperTrend and "
                         "low <= SuperTrend; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
@@ -340,6 +393,7 @@ def scan(
     limit: int = 0,
     sort_by: str | None = None,
     sort_dir: str | None = None,
+    universe: str = DEFAULT_UNIVERSE,
 ):
     params = {
         "from_date": from_date,
@@ -350,6 +404,7 @@ def scan(
         "limit": limit,
         "sort_by": sort_by,
         "sort_dir": sort_dir,
+        "universe": universe,
     }
     try:
         date_range = {}
@@ -364,7 +419,16 @@ def scan(
         "criteria": date_range["criteria"],
         "columns": COLUMNS,
         "presentation": PRESENTATION,
-        "parameters": [],
+        "parameters": [
+            {
+                "key": "universe",
+                "label": "Universe",
+                "multi": True,
+                "options": UNIVERSE_OPTIONS,
+                "default": DEFAULT_UNIVERSE,
+                "value": date_range["universe"],
+            }
+        ],
         "date_range": {
             "mode": "range",
             "from_date": date_range["from_date"],

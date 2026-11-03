@@ -2,19 +2,21 @@ import json
 import os
 import shlex
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from main import _truth, run_scan, scan
+import main
+from main import DEFAULT_UNIVERSE, UNIVERSE_OPTIONS, _truth, run_scan, scan
 
 
 FIXTURE_PATH = (
     Path(__file__).parent
     / "chart-evidence"
-    / "90348f960a5b"
+    / "71a6dbb9c590"
     / "acceptance_cases.json"
 )
 with FIXTURE_PATH.open(encoding="utf-8") as fixture_file:
@@ -106,7 +108,9 @@ def test_chart_acceptance(case):
     actual_rows = [
         row
         for row in rows
-        if row["stock"] == case["symbol"] and row["date"] == target_time
+        if row["stock"] == case["symbol"]
+        and row["date"] == target_time
+        and row["interval"] == case["interval"]
     ]
     expected_match = case["expect"] == "must_match"
     condition_values = next(
@@ -146,7 +150,6 @@ def test_chart_acceptance(case):
                         .replace(tzinfo=IST)
                         .timestamp()
                     ),
-                    "interval": case["interval"],
                 }
                 for row in actual_rows
             ],
@@ -180,6 +183,114 @@ def test_invalid_as_of_returns_bad_request():
         "success": False,
         "error": "as_of must use YYYY-MM-DDTHH:MM format in IST",
     }
+
+
+@pytest.mark.parametrize(
+    ("universe", "expected_ids"),
+    [
+        (None, ["nifty_500"]),
+        ("nifty_50", ["nifty_50"]),
+        (" nifty_50, nifty_100,nifty_50 ", ["nifty_50", "nifty_100"]),
+        ("all", []),
+        ("", []),
+        (" , ", []),
+        ("nifty_50,all", []),
+        ("unknown", ["nifty_500"]),
+        ("nifty_50,unknown", ["nifty_500"]),
+        ("all,unknown", ["nifty_500"]),
+        ("nifty_50') OR 1=1 --", ["nifty_500"]),
+        *[(option["value"], [option["value"]]) for option in UNIVERSE_OPTIONS[:-1]],
+    ],
+)
+def test_universe_drives_queries(monkeypatch, universe, expected_ids):
+    class Client:
+        def __init__(self):
+            self.queries = []
+            self.closed = False
+
+        def query(self, sql, parameters=None):
+            self.queries.append((sql, parameters))
+            if "universe_members" in sql:
+                return SimpleNamespace(result_rows=[("AAA",), ("BBB",), ("AAA",)])
+            if "trading_date" in sql:
+                return SimpleNamespace(result_rows=[(date(2025, 8, 26),)])
+            return SimpleNamespace(result_rows=[])
+
+        def close(self):
+            self.closed = True
+
+    client = Client()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    metadata = {}
+    params = {
+        "universe": universe,
+        "as_of": "2025-08-26T00:00",
+        "from_date": "2025-08-26",
+        "to_date": "2025-08-26",
+    }
+    assert run_scan(params, metadata=metadata) == []
+    assert client.closed
+    membership_queries = [
+        query for query in client.queries if "universe_members" in query[0]
+    ]
+    assert len(membership_queries) == bool(expected_ids)
+    if expected_ids:
+        sql, parameters = membership_queries[0]
+        assert "FINAL" in sql and "active = 1" in sql
+        assert "universe_id IN {universe_ids:Array(String)}" in sql
+        assert parameters == {"universe_ids": expected_ids}
+    for sql, parameters in client.queries:
+        if "stock__candles_data" in sql:
+            assert ("stock IN {symbols:Array(String)}" in sql) == bool(expected_ids)
+            assert parameters.get("symbols") == (["AAA", "BBB"] if expected_ids else None)
+            assert parameters["as_of"] == "2025-08-26 00:00:00"
+    assert metadata["universe"] == (",".join(expected_ids) or "all")
+
+
+@pytest.mark.parametrize("universe", ["all", "", "nifty_50,nifty_100"])
+def test_universe_symbol_filter_and_api_metadata(monkeypatch, universe):
+    calls = []
+
+    class Client:
+        def query(self, sql, parameters=None):
+            calls.append((sql, parameters))
+            if "universe_members" in sql:
+                return SimpleNamespace(result_rows=[("RELIANCE",), ("OTHER",)])
+            if "trading_date" in sql:
+                return SimpleNamespace(result_rows=[(date(2025, 8, 26),)])
+            return SimpleNamespace(
+                result_rows=[
+                    ("RELIANCE", datetime(2025, 8, 26), 1353.9, 1340.6, 55298152, 1345.0)
+                ]
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(main, "_client", Client)
+    response = scan(
+        universe=universe,
+        symbols="RELIANCE,RELIANCE",
+        as_of="2025-08-26T00:00",
+        from_date="2025-08-26",
+        to_date="2025-08-26",
+    )
+    assert response["success"]
+    assert response["matches"][0]["stock"] == "RELIANCE"
+    assert response["matches"][0]["direction"] == "BUY"
+    assert response["matches"][0]["interval"] == "weekly"
+    assert response["direction"]["buy"] == "close > SuperTrend and low <= SuperTrend"
+    parameter = response["parameters"][0]
+    assert parameter["key"] == "universe"
+    assert parameter["multi"] is True
+    assert parameter["default"] == DEFAULT_UNIVERSE
+    assert parameter["options"] == FIXTURE["spec"]["parameters"][0]["options"]
+    assert parameter["value"] == (universe or "all")
+    assert "as_of 2025-08-26T00:00 IST" in response["criteria"]
+    for sql, parameters in calls:
+        if "stock__candles_data" in sql:
+            assert "stock IN {symbols:Array(String)}" in sql
+            assert parameters["symbols"] == ["RELIANCE"]
 
 
 @pytest.fixture(scope="session", autouse=True)
