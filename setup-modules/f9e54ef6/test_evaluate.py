@@ -17,9 +17,16 @@ def _payload(mode="alert", spec=None, new=("AAA", "BBB")):
                   "params": {}, "legs": deepcopy(SPEC["legs"]), "sizing": deepcopy(SPEC["sizing"])},
         "run": {"run_id": "r", "candle_ts": "2026-10-28T15:30:00", "interval": "DAILY"},
         "matches": [{"stock": s} for s in new],
-        "signals": {"new": [{"stock": s, "row": {"stock": s, "direction": "BUY", "close": 120,
+        "signals": {"new": [{"stock": s, "row": {"stock": s, "date": "2026-10-28",
+                                                "direction": "BUY", "close": 120,
                                                 "volume": 5000}} for s in new], "still": [], "dropped": []},
-        "positions": [], "candles": {}, "sectors": {}, "market": {},
+        "positions": [], "candles": {
+            s: [
+                {"date": "2026-10-27", "low": 97, "high": 103},
+                {"date": "2026-10-26", "low": 95, "high": 104},
+                {"date": "2026-10-25", "low": 96, "high": 102},
+            ] for s in new
+        }, "sectors": {}, "market": {},
     }
 
 
@@ -58,10 +65,13 @@ def test_authoritative_configuration():
     }
     assert SPEC["data_wait"] == {"max_wait_sec": 150}
     assert SPEC["direction"] == {"mode": "screener", "column": "direction"}
-    assert SPEC["legs"]["sl"] == {"kind": "pct", "value": 1.0}
+    assert SPEC["holding_period"] == {
+        "mode": "intraday", "max_days": 5, "intraday_close_time": "15:15",
+    }
+    assert SPEC["legs"]["sl"] == {"kind": "price", "value": 0.0}
     assert SPEC["legs"]["targets"] == [{"kind": "pct", "value": 500.0, "qty_pct": 100.0}]
-    assert SPEC["legs"]["time_exit_minutes"] == 30 * 24 * 60
-    assert SPEC["sizing"]["product"] == "CNC"
+    assert SPEC["legs"]["time_exit_minutes"] == 1440
+    assert SPEC["sizing"]["product"] == "MIS"
     assert SPEC["sizing"]["per_position_cap"] == 100000
     assert SPEC["guardrails"]["max_trades_per_day"] == 10
     assert SPEC["guardrails"]["cooldown_minutes"] == 30
@@ -74,12 +84,44 @@ def test_recorded_specification_preserves_refinement_summary_and_highlights():
     prompt = manifest["prompt"]
     assert "## Refinement Summary" in prompt
     assert "**Changed:**" in prompt
-    assert "30 calendar days" in prompt
-    assert "43,200 minutes" in prompt
-    assert "CNC" in prompt
+    assert "three completed daily candles" in prompt
+    assert "15:15 IST" in prompt
+    assert "MIS" in prompt
     assert SPEC["custom_instructions"] in prompt
     assert SPEC["custom_instructions"]
-    assert "60 days after entry" not in prompt
+    assert "Stop-Loss: 1% from entry is not correct stoploss" in prompt
+
+
+def test_entry_stop_uses_only_three_completed_candles_before_signal_date():
+    payload = _payload(new=("AAA",))
+    payload["candles"]["AAA"].extend([
+        {"date": "2026-10-28", "low": 1, "high": 999},
+        {"date": "2026-10-29", "low": 2, "high": 998},
+    ])
+    entry = client.post("/evaluate", json=payload).json()["actions"][1]
+    assert entry["sl"] == {"kind": "price", "value": 95}
+
+
+def test_short_entry_stop_uses_high_of_previous_three_candles():
+    payload = _payload(new=("AAA",))
+    payload["signals"]["new"][0]["row"]["direction"] = "SELL"
+    entry = client.post("/evaluate", json=payload).json()["actions"][1]
+    assert entry["side"] == "short"
+    assert entry["sl"] == {"kind": "price", "value": 104}
+
+
+@pytest.mark.parametrize("candles", [
+    [],
+    [{"date": "2026-10-27", "low": 97, "high": 103},
+     {"date": "2026-10-26", "low": 95, "high": 104}],
+    [{"date": "2026-10-28", "low": 1, "high": 999},
+     {"date": "2026-10-29", "low": 2, "high": 998},
+     {"date": "2026-10-30", "low": 3, "high": 997}],
+])
+def test_missing_three_prior_candles_blocks_entry_but_keeps_alert(candles):
+    payload = _payload(new=("AAA",))
+    payload["candles"]["AAA"] = candles
+    assert [a["type"] for a in client.post("/evaluate", json=payload).json()["actions"]] == ["alert"]
 
 
 @pytest.mark.parametrize("age_days", [1, 15, 29, 30, 31])
@@ -120,7 +162,8 @@ def test_screener_columns_and_exact_alert_text(direction, side, display_labels):
     assert alert["side"] == entry["side"] == side
     assert alert["stock"] == entry["stock"] == "AAA"
     assert entry == {"type": "enter", "stock": "AAA", "side": side,
-                     "sizing": {"kind": "capital", "value": 100000}}
+                     "sizing": {"kind": "capital", "value": 100000},
+                     "sl": {"kind": "price", "value": 104 if side == "short" else 95}}
 
 
 @pytest.mark.parametrize("direction", ["NEUTRAL", None, "", "bull", "LONG", "SHORT", 1])
@@ -177,7 +220,8 @@ def test_modes_keep_engine_owned_legs_and_ignore_intraday_window(mode):
     payload["market"] = {"time_ist": "15:35:00", "nifty_open_direction": "short"}
     entry = client.post("/evaluate", json=payload).json()["actions"][1]
     assert entry["side"] == "long"
-    assert not {"entry", "sl", "targets", "qty", "trailing"} & entry.keys()
+    assert not {"entry", "targets", "qty", "trailing"} & entry.keys()
+    assert entry["sl"] == {"kind": "price", "value": 95}
 
 
 def test_only_new_signals_are_acted_on_and_positions_are_engine_managed():

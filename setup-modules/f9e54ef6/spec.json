@@ -22,13 +22,18 @@
     "include_columns": []
   },
   "trade_legs": true,
+  "holding_period": {
+    "mode": "intraday",
+    "max_days": 5,
+    "intraday_close_time": "15:15"
+  },
   "legs": {
     "side": "long",
     "entry": {"kind": "market", "pullback_pct": 0.5, "timeout_candles": 3},
-    "sl": {"kind": "pct", "value": 1.0},
+    "sl": {"kind": "price", "value": 0.0},
     "targets": [{"kind": "pct", "value": 500.0, "qty_pct": 100.0}],
     "trailing": {"kind": "none", "value": 0.0},
-    "time_exit_minutes": 43200,
+    "time_exit_minutes": 1440,
     "exit_on_drop": false,
     "exit_on_opposite": false,
     "ref_candle": "signal",
@@ -42,7 +47,7 @@
     "capital": 100000.0,
     "per_position_cap": 100000.0,
     "max_positions": 3,
-    "product": "CNC",
+    "product": "MIS",
     "slippage_pct": 0.05,
     "risk_pct": 0.0
   },
@@ -56,7 +61,7 @@
   "entry_style": "",
   "exit_rules": "",
   "notes": "",
-  "custom_instructions": "1.  Window\n09:30–15:15 IST · skip first 15 min is not correct , window will be 30 days minium to allow stock to hit stoploss or target , the screener attached with this runs on daily timeframe",
+  "custom_instructions": "1.  Window\n09:30–15:15 IST · skip first 15 min is not correct , window will be 30 days minium to allow stock to hit stoploss or target , the screener attached with this runs on daily timeframe\nStop-Loss: 1% from entry is not correct stoploss , change it to below lowest of previous 3 days candle from signal date",
   "data_wait": {"max_wait_sec": 150},
   "direction": {"mode": "screener", "column": "direction"},
   "dynamic_params": false,

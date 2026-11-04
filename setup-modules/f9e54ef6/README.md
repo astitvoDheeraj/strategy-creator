@@ -20,24 +20,25 @@ Alert mode records hypothetical entries; paper/live execution is engine-owned.
 
 ## Refinement Summary
 
-- **Changed:** removed the 09:30–15:15 IST window, first-15-minute skip and
-  15:15 square-off. The engine evaluates daily candles after close until paused
-  or stopped, with no setup end date.
-- **Changed:** the time exit is now 30 calendar days (43,200 minutes) after
-  entry, rather than 1,440 minutes. This is the minimum holding opportunity,
-  not a lock-in: the engine can still exit at the stop or target earlier.
-- **Changed:** `CNC` delivery replaces intraday-only `MIS` so positions can
-  remain open across days.
+- **Changed:** each entry uses the lowest low of the three completed daily
+  candles before the signal date as its long stop. For a screener-directed short
+  entry, the stop is the highest high of those candles. Entries are skipped if
+  that three-candle history is unavailable; alerts still fire.
+- **Changed:** the holding period is intraday. The engine closes any remaining
+  position by 15:15 IST on the same trading day; stop, target and explicit exits
+  may close it sooner. The daily time-exit setting remains 1,440 minutes.
 
 `spec.json` otherwise preserves the deployed fixed configuration: market
-entry, 1% stop and a 500% target for 100% of quantity. The previous narrative's
-candle-low stop, open-based 1:5 target and 60-day exit are not applied.
+entry and a 500% target for 100% of quantity. The computed stop price is passed
+with each entry and replaces the previous 1% stop. The engine owns intraday
+square-off; the module does not add a schedule or time filter.
 
 The engine owns daily-after-close scheduling, the configured run window, the
 150-second data wait, once-per-stock-per-day deduplication, 10 trades/day,
 30-minute stock cooldown and other configured limits. Evaluation does not wait,
-query the screener, or implement an intraday gate. Missing candle/market data is
-safe; SL/target/time exits remain engine-owned even with no new signals.
+query the screener, or implement an intraday gate. Missing prior-candle data
+blocks an entry but not its alert; SL/target/time exits remain engine-owned even
+with no new signals.
 
 No additional parameters or panels are needed. `/manifest` returns empty lists;
 unknown panels return 404. `manifest.json` records the complete updated

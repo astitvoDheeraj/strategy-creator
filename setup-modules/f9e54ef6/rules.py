@@ -2,6 +2,7 @@
 
 import json
 import math
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -19,6 +20,61 @@ def _num(v):
 
 def _value(row: dict, key: str, label: str):
     return row[key] if key in row else row.get(label)
+
+
+def _candle_date(candle: dict) -> date | None:
+    value = next(
+        (
+            candle[key]
+            for key in ("date", "Date", "timestamp", "time", "t")
+            if key in candle
+        ),
+        None,
+    )
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        timestamp = value / 1000 if abs(value) >= 1_000_000_000_000 else value
+        try:
+            return datetime.fromtimestamp(timestamp, timezone.utc).date()
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+            except ValueError:
+                return None
+    return None
+
+
+def _prior_stop(candles: list, signal_date: date, side: str) -> float | None:
+    extremes = {}
+    price_key = "high" if side == "short" else "low"
+    short_key = "h" if side == "short" else "l"
+    for candle in candles:
+        if not isinstance(candle, dict):
+            continue
+        candle_date = _candle_date(candle)
+        price = _num(candle.get(price_key, candle.get(short_key)))
+        if candle_date and candle_date < signal_date and price is not None:
+            extremes[candle_date] = (
+                max(extremes.get(candle_date, price), price)
+                if side == "short"
+                else min(extremes.get(candle_date, price), price)
+            )
+    prior = sorted(extremes.items(), reverse=True)[:3]
+    if len(prior) != 3:
+        return None
+    return (
+        max(price for _, price in prior)
+        if side == "short"
+        else min(price for _, price in prior)
+    )
 
 
 def screener_side(signal: dict) -> str:
@@ -68,11 +124,29 @@ def evaluate(payload: dict) -> dict:
             continue
         if str(stock).upper() in occupied or capital is None or capital <= 0:
             continue
+        candle_data = payload.get("candles") or {}
+        candles = (
+            candle_data.get(stock) or candle_data.get(str(stock).upper()) or []
+            if isinstance(candle_data, dict)
+            else []
+        )
+        signal_date_value = (
+            _value(row, "date", "Date")
+            or sig.get("date")
+            or (payload.get("run") or {}).get("candle_ts")
+        )
+        signal_date = _candle_date({"date": signal_date_value})
+        if signal_date is None:
+            continue
+        stop = _prior_stop(candles, signal_date, side)
+        if stop is None:
+            continue
         actions.append({
             "type": "enter",
             "stock": stock,
             "side": side,
             "sizing": {"kind": "capital", "value": capital},
+            "sl": {"kind": "price", "value": stop},
         })
         occupied.add(str(stock).upper())
     notes = f"No trade for NEUTRAL or unknown screener signals: {', '.join(neutral)}" if neutral else ""
