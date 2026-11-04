@@ -1,5 +1,5 @@
 {
-  "command": "python -m pytest -vv test_acceptance.py",
+  "command": "python -m pytest -vv -p no:cacheprovider test_acceptance.py",
   "summary": "4 passed, 0 failed, 0 skipped",
   "exit_code": 0,
   "cases": [

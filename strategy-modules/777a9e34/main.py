@@ -272,7 +272,14 @@ def run_scan(
         all_matches: dict[date, list[dict[str, Any]]] = {}
         total = 0
         for trading_day in applied_dates:
-            target = f"{trading_day.isoformat()} 23:59:59"
+            target_datetime = (
+                as_of
+                if trading_day == as_of.date()
+                else datetime.combine(trading_day, datetime.max.time()).replace(
+                    tzinfo=IST
+                )
+            )
+            target = target_datetime.strftime("%Y-%m-%d %H:%M:%S")
             candle_rows = client.query(
                 "SELECT stock, date, open, close, volume FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
@@ -381,6 +388,7 @@ def health() -> dict[str, str]:
 
 @router.get("/scan")
 def scan(
+    interval: str | None = None,
     universe: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -391,6 +399,7 @@ def scan(
     limit: int = 50,
 ):
     params = {
+        "interval": interval,
         "universe": universe,
         "from_date": from_date,
         "to_date": to_date,
@@ -424,11 +433,18 @@ def scan(
         f"{metadata['to_date']}; as_of {metadata['as_of']}; "
         f"sorted by {metadata['sort_by']} {metadata['sort_dir']}"
     )
+    presentation = {
+        **PRESENTATION,
+        "sort": {
+            "key": metadata["sort_by"],
+            "direction": metadata["sort_dir"],
+        },
+    }
     return {
         "success": True,
         "criteria": criteria,
         "columns": COLUMNS,
-        "presentation": PRESENTATION,
+        "presentation": presentation,
         "parameters": [universe_parameter],
         "date_range": {
             "mode": "range",
