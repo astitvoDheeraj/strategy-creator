@@ -1,0 +1,66 @@
+{
+  "setup_id": "f9e54ef6",
+  "screener_job_id": "777a9e34",
+  "screener_title": "Biggest Green Candle Finder",
+  "screener_params": {"universe": "nifty_200"},
+  "interval": "DAILY",
+  "universe": {"mode": "inherit", "stocks": [], "index": ""},
+  "scope": {"mode": "all", "n": 0, "column": "", "direction": "desc"},
+  "run_window": {
+    "start_date": "",
+    "end_date": "",
+    "time_start": "09:30",
+    "time_end": "15:15",
+    "skip_first_minutes": 15,
+    "square_off_time": "15:15",
+    "weekdays": []
+  },
+  "dedupe_policy": "once_per_day",
+  "alert": {
+    "template": "{symbol} - {direction} - LTP: {ltp} - Volume: {volume} - Reason: Biggest green candle.",
+    "channels": ["inapp", "email"],
+    "include_columns": []
+  },
+  "trade_legs": true,
+  "legs": {
+    "side": "long",
+    "entry": {"kind": "market", "pullback_pct": 0.5, "timeout_candles": 3},
+    "sl": {"kind": "pct", "value": 1.0},
+    "targets": [{"kind": "pct", "value": 500.0, "qty_pct": 100.0}],
+    "trailing": {"kind": "none", "value": 0.0},
+    "time_exit_minutes": 1440,
+    "exit_on_drop": false,
+    "exit_on_opposite": false,
+    "ref_candle": "signal",
+    "single_leg": false,
+    "remainder": "last_target",
+    "breakeven_after_first_target": false,
+    "adds": {"enabled": false, "kind": "range", "step": 0.5, "max_adds": 3, "qty_mult": 1.0},
+    "nifty_filter": "off"
+  },
+  "sizing": {
+    "capital": 100000.0,
+    "per_position_cap": 100000.0,
+    "max_positions": 3,
+    "product": "MIS",
+    "slippage_pct": 0.05,
+    "risk_pct": 0.0
+  },
+  "guardrails": {
+    "max_alerts_per_day": 60,
+    "max_daily_loss": 0.0,
+    "max_trades_per_day": 10,
+    "cooldown_minutes": 30,
+    "max_per_sector": 0
+  },
+  "entry_style": "",
+  "exit_rules": "",
+  "notes": "",
+  "custom_instructions": "",
+  "data_wait": {"max_wait_sec": 150},
+  "direction": {"mode": "screener", "column": "direction"},
+  "dynamic_params": false,
+  "context": {"candles": 20},
+  "assumed_defaults": [],
+  "mode": "alert"
+}
