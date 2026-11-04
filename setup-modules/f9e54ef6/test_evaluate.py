@@ -1,4 +1,6 @@
 from copy import deepcopy
+import json
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 import pytest
@@ -50,16 +52,57 @@ def test_authoritative_configuration():
     assert SPEC["interval"] == "DAILY"
     assert SPEC["dedupe_policy"] == "once_per_day"
     assert SPEC["alert"]["channels"] == ["inapp", "email"]
-    assert SPEC["run_window"]["time_start"] == "09:30"
-    assert SPEC["run_window"]["time_end"] == "15:15"
+    assert SPEC["run_window"] == {
+        "start_date": "", "end_date": "", "time_start": "", "time_end": "",
+        "skip_first_minutes": 0, "square_off_time": "", "weekdays": [],
+    }
     assert SPEC["data_wait"] == {"max_wait_sec": 150}
     assert SPEC["direction"] == {"mode": "screener", "column": "direction"}
     assert SPEC["legs"]["sl"] == {"kind": "pct", "value": 1.0}
     assert SPEC["legs"]["targets"] == [{"kind": "pct", "value": 500.0, "qty_pct": 100.0}]
-    assert SPEC["legs"]["time_exit_minutes"] == 1440
+    assert SPEC["legs"]["time_exit_minutes"] == 30 * 24 * 60
+    assert SPEC["sizing"]["product"] == "CNC"
     assert SPEC["sizing"]["per_position_cap"] == 100000
     assert SPEC["guardrails"]["max_trades_per_day"] == 10
     assert SPEC["guardrails"]["cooldown_minutes"] == 30
+
+
+def test_recorded_specification_preserves_refinement_summary_and_highlights():
+    manifest = json.loads(Path(__file__).with_name("manifest.json").read_text())
+    assert manifest["setup_id"] == SPEC["setup_id"]
+    assert manifest["screener_job_id"] == SPEC["screener_job_id"]
+    prompt = manifest["prompt"]
+    assert "## Refinement Summary" in prompt
+    assert "**Changed:**" in prompt
+    assert "30 calendar days" in prompt
+    assert "43,200 minutes" in prompt
+    assert "CNC" in prompt
+    assert SPEC["custom_instructions"] in prompt
+    assert SPEC["custom_instructions"]
+    assert "60 days after entry" not in prompt
+
+
+@pytest.mark.parametrize("age_days", [1, 15, 29, 30, 31])
+@pytest.mark.parametrize("mode", ["alert", "paper", "live"])
+def test_daily_holding_uses_engine_exits_without_blocking_new_signals(age_days, mode):
+    from datetime import datetime, timedelta
+
+    payload = _payload(mode=mode, new=("BBB",))
+    candle_ts = datetime.fromisoformat(payload["run"]["candle_ts"])
+    payload["positions"] = [{
+        "position_id": "p1", "stock": "AAA", "status": "open",
+        "opened_at": (candle_ts - timedelta(days=age_days)).isoformat(),
+        "entry_price": 120, "ltp": 120, "sl": 118.8, "target": 720,
+    }]
+    payload["market"] = {"time_ist": "15:35:00"}
+    original = deepcopy(payload)
+    actions = client.post("/evaluate", json=payload).json()["actions"]
+    assert [a["type"] for a in actions] == ["alert", "enter"]
+    assert all(a["stock"] == "BBB" for a in actions)
+    payload["signals"]["new"] = []
+    assert client.post("/evaluate", json=payload).json()["actions"] == []
+    payload["signals"]["new"] = original["signals"]["new"]
+    assert payload == original
 
 
 @pytest.mark.parametrize("direction,side", [("BUY", "long"), ("SELL", "short"), (" buy ", "long")])

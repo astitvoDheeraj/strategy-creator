@@ -18,10 +18,20 @@ or nonpositive capital blocks entries, not alerts. The engine computes share
 quantities, applies free-capital caps and guardrails, and manages all trade legs.
 Alert mode records hypothetical entries; paper/live execution is engine-owned.
 
-`spec.json` preserves the issue's **authoritative fixed configuration**:
-market entry, 1% stop, a 500% target for 100% of quantity, and a 1,440-minute
-time exit. These differ from the narrative's candle-low stop, open-based 1:5
-target and 60-day exit; no narrative overrides are applied.
+## Refinement Summary
+
+- **Changed:** removed the 09:30–15:15 IST window, first-15-minute skip and
+  15:15 square-off. The engine evaluates daily candles after close until paused
+  or stopped, with no setup end date.
+- **Changed:** the time exit is now 30 calendar days (43,200 minutes) after
+  entry, rather than 1,440 minutes. This is the minimum holding opportunity,
+  not a lock-in: the engine can still exit at the stop or target earlier.
+- **Changed:** `CNC` delivery replaces intraday-only `MIS` so positions can
+  remain open across days.
+
+`spec.json` otherwise preserves the deployed fixed configuration: market
+entry, 1% stop and a 500% target for 100% of quantity. The previous narrative's
+candle-low stop, open-based 1:5 target and 60-day exit are not applied.
 
 The engine owns daily-after-close scheduling, the configured run window, the
 150-second data wait, once-per-stock-per-day deduplication, 10 trades/day,
@@ -30,7 +40,8 @@ query the screener, or implement an intraday gate. Missing candle/market data is
 safe; SL/target/time exits remain engine-owned even with no new signals.
 
 No additional parameters or panels are needed. `/manifest` returns empty lists;
-unknown panels return 404. `manifest.json` retains the original request.
+unknown panels return 404. `manifest.json` records the complete updated
+specification, refinement summary and inline change highlights.
 
 From this directory, run `python -m pytest -q`, or start `uvicorn main:app`.
 The container exposes the same `/health`, `/manifest` and `/evaluate` endpoints
