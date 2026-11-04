@@ -15,6 +15,7 @@ DEFAULT_UNIVERSE = "nifty_200"
 DEFAULT_DAYS = 60
 MAX_DAYS = 90
 LOOKBACK_CANDLES = 30
+WEEKLY_LOOKBACK_CANDLES = 56
 UNIVERSE_OPTIONS = {
     "nifty_200": "NIFTY 200",
     "nifty_50": "NIFTY 50",
@@ -35,23 +36,30 @@ COLUMNS = [
     {"key": "direction", "label": "Direction", "format": "direction"},
     {"key": "close", "label": "Last price (LTP)", "format": "price"},
     {"key": "volume", "label": "Volume", "format": "int"},
+    {
+        "key": "weekly_pullback_pct",
+        "label": "Pullback from 56-week high (%)",
+        "format": "price",
+    },
+    {"key": "liquidity", "label": "Liquidity", "format": "price"},
+    {"key": "range_pct", "label": "Candle range (%)", "format": "price"},
 ]
 PRESENTATION = {
     "style": "table",
-    "sort": {"key": "volume", "direction": "desc"},
+    "sort": {"key": "weekly_pullback_pct", "direction": "desc"},
     "ui_filters": ["symbol_search", "column_sort"],
     "limit": 50,
     "page_size": 25,
     "pagination": "pages",
     "notes": "",
-    "group_by_date": True,
-    "date_chips": True,
+    "group_by_date": False,
+    "date_chips": False,
 }
 DIRECTION = {
     "enabled": True,
     "buy": (
-        "Green candle whose (close - open) body equals the maximum body "
-        "over the last 30 available daily candles"
+        "The day's selected stock has a green candle whose (close - open) body "
+        "equals the maximum body over the last 30 available daily candles"
     ),
     "sell": "",
     "neutral": "Matches neither the BUY rule nor the SELL rule",
@@ -179,9 +187,11 @@ def run_scan(
         if (to_date - from_date).days + 1 > MAX_DAYS:
             raise ScanParameterError("date range must not exceed 90 calendar days")
 
-    sort_by = str(params.get("sort_by") or "volume")
+    sort_by = str(params.get("sort_by") or "weekly_pullback_pct")
     if sort_by not in {column["key"] for column in COLUMNS}:
-        raise ScanParameterError("sort_by must be one of stock, scan_date, direction, close, volume")
+        raise ScanParameterError(
+            f"sort_by must be one of {', '.join(column['key'] for column in COLUMNS)}"
+        )
     sort_dir = str(params.get("sort_dir") or "desc").lower()
     if sort_dir not in {"asc", "desc"}:
         raise ScanParameterError("sort_dir must be 'asc' or 'desc'")
@@ -283,7 +293,8 @@ def run_scan(
             )
             target = target_datetime.strftime("%Y-%m-%d %H:%M:%S")
             candle_rows = client.query(
-                "SELECT stock, date, open, close, volume FROM stock__candles_data "
+                "SELECT stock, date, open, high, low, close, volume "
+                "FROM stock__candles_data "
                 "WHERE interval = {interval:String} "
                 f"{symbol_filter}"
                 "AND date <= toDateTime({target:String}) "
@@ -294,30 +305,92 @@ def run_scan(
                     "lookback": LOOKBACK_CANDLES,
                 },
             ).result_rows
+            weekly_rows = client.query(
+                "SELECT stock, date, high FROM stock__candles_data "
+                "WHERE interval = {weekly_interval:String} "
+                f"{symbol_filter}"
+                "AND date <= toDateTime({target:String}) "
+                "ORDER BY stock, date DESC "
+                "LIMIT {weekly_lookback:UInt8} BY stock",
+                parameters={
+                    **symbol_parameters,
+                    "weekly_interval": "weekly",
+                    "target": target,
+                    "weekly_lookback": WEEKLY_LOOKBACK_CANDLES,
+                },
+            ).result_rows
             history: dict[str, list[dict[str, Any]]] = {}
-            for stock, candle_date, open_price, close, volume in candle_rows:
+            for (
+                stock,
+                candle_date,
+                open_price,
+                high,
+                low,
+                close,
+                volume,
+            ) in candle_rows:
                 history.setdefault(str(stock), []).append(
                     {
                         "date": candle_date,
                         "open": open_price,
+                        "high": high,
+                        "low": low,
                         "close": close,
                         "volume": volume,
                     }
                 )
 
+            weekly_highs: dict[str, list[Any]] = {}
+            for stock, _candle_date, high in weekly_rows:
+                if high is not None:
+                    weekly_highs.setdefault(str(stock), []).append(high)
+
             day_matches = []
+            daily_diagnostics = []
             for stock, candles in history.items():
                 target_candle = next(
-                    (candle for candle in candles if _as_date(candle["date"]) == trading_day),
+                    (
+                        candle
+                        for candle in candles
+                        if _as_date(candle["date"]) == trading_day
+                    ),
                     None,
                 )
                 if target_candle is None:
                     continue
                 body = target_candle["close"] - target_candle["open"]
-                max_body = max(candle["close"] - candle["open"] for candle in candles)
+                max_body = max(
+                    candle["close"] - candle["open"] for candle in candles
+                )
                 green = target_candle["close"] > target_candle["open"]
                 body_is_max = body == max_body
-                matched = green and body_is_max
+                daily_match = green and body_is_max
+                highs = weekly_highs.get(stock, [])
+                weekly_high = max(highs) if highs else None
+                range_available = (
+                    target_candle["high"] is not None
+                    and target_candle["low"] is not None
+                    and target_candle["close"] not in (None, 0)
+                )
+                weekly_available = weekly_high is not None and weekly_high > 0
+                pullback_pct = (
+                    100 * (weekly_high - target_candle["close"]) / weekly_high
+                    if weekly_available and target_candle["close"] is not None
+                    else None
+                )
+                range_pct = (
+                    100
+                    * (target_candle["high"] - target_candle["low"])
+                    / target_candle["close"]
+                    if range_available
+                    else None
+                )
+                liquidity = (
+                    target_candle["close"] * target_candle["volume"]
+                    if target_candle["close"] is not None
+                    and target_candle["volume"] is not None
+                    else None
+                )
                 target_timestamp = _timestamp(target_candle["date"])
                 condition_values = {
                     "data_available": True,
@@ -326,36 +399,71 @@ def run_scan(
                     "max_body_last_30": max_body,
                     "green_candle": green,
                     "body_is_max": body_is_max,
-                    "all_conditions": matched,
+                    "weekly_lookback_candle_count": len(highs),
+                    "weekly_high_last_56": weekly_high,
+                    "weekly_pullback_pct": pullback_pct,
+                    "liquidity": liquidity,
+                    "range_pct": range_pct,
+                    "all_conditions": daily_match
+                    and weekly_available
+                    and liquidity is not None
+                    and range_pct is not None,
                 }
                 row = {
                     "stock": stock,
                     "scan_date": trading_day.isoformat(),
-                    "direction": "BUY" if matched else "NEUTRAL",
+                    "direction": "BUY",
                     "close": target_candle["close"],
                     "volume": target_candle["volume"],
+                    "weekly_pullback_pct": pullback_pct,
+                    "liquidity": liquidity,
+                    "range_pct": range_pct,
                 }
+                if daily_match and condition_values["all_conditions"]:
+                    day_matches.append(row)
                 if diagnostics is not None:
-                    diagnostics.append(
+                    daily_diagnostics.append(
                         {
                             "stock": stock,
                             "at": target_timestamp,
                             "interval": interval,
                             "condition_values": condition_values,
-                            "matched": matched,
-                            "matched_row": row if matched else None,
+                            "row": row,
+                            "eligible": daily_match
+                            and condition_values["all_conditions"],
                         }
                     )
-                if matched:
-                    day_matches.append(row)
             day_matches.sort(
-                key=lambda row: (row[sort_by], row["stock"]),
-                reverse=sort_dir == "desc",
+                key=lambda row: (
+                    -row["weekly_pullback_pct"],
+                    -row["liquidity"],
+                    -row["range_pct"],
+                    row["stock"],
+                ),
             )
-            total += len(day_matches)
-            all_matches[trading_day] = (
-                day_matches if limit == 0 else day_matches[:limit]
-            )
+            selected = day_matches[:1]
+            total += len(selected)
+            all_matches[trading_day] = selected if limit == 0 else selected[:limit]
+            if diagnostics is not None:
+                selected_stocks = {row["stock"] for row in selected}
+                diagnostics.extend(
+                    {
+                        "stock": item["stock"],
+                        "at": item["at"],
+                        "interval": item["interval"],
+                        "condition_values": {
+                            **item["condition_values"],
+                            "selected_for_day": item["stock"] in selected_stocks,
+                            "all_conditions": item["eligible"]
+                            and item["stock"] in selected_stocks,
+                        },
+                        "matched": item["stock"] in selected_stocks,
+                        "matched_row": (
+                            item["row"] if item["stock"] in selected_stocks else None
+                        ),
+                    }
+                    for item in daily_diagnostics
+                )
 
         matches = [
             row
@@ -434,7 +542,10 @@ def scan(
     criteria = (
         f"{metadata['universe_description']}; daily candles; green candle with "
         f"(close - open) equal to the maximum body of the last {LOOKBACK_CANDLES} "
-        f"available candles; dates {metadata['from_date']} through "
+        f"available candles; one stock per day selected by descending pullback "
+        f"from the highest high of the last {WEEKLY_LOOKBACK_CANDLES} available "
+        f"weekly candles, then daily traded value (close × volume), then daily "
+        f"range percentage; dates {metadata['from_date']} through "
         f"{metadata['to_date']}; as_of {metadata['as_of']}; "
         f"sorted by {metadata['sort_by']} {metadata['sort_dir']}"
     )
