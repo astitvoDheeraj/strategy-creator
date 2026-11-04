@@ -60,7 +60,9 @@ router = APIRouter(prefix=f"/strategy-api/{JOB_ID}")
 
 
 class ScanParameterError(Exception):
-    pass
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_message = message
 
 
 def _client():
@@ -413,7 +415,10 @@ def scan(
     try:
         matches = run_scan(params, metadata=metadata)
     except ScanParameterError as exc:
-        return JSONResponse(status_code=400, content={"success": False, "error": str(exc)})
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": exc.public_message},
+        )
 
     universe_parameter = {
         "key": "universe",
