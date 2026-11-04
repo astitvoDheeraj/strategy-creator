@@ -1,0 +1,1 @@
+This module scans NIFTY 200 daily candles by date and identifies green candles whose close-minus-open body is the largest among that stock's 30 most recent available candles, returning BUY matches ordered by volume with date-range filtering.

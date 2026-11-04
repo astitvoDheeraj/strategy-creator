@@ -1,0 +1,39 @@
+{
+  "command": "python -m pytest -vv test_acceptance.py",
+  "summary": "4 passed, 0 failed, 0 skipped",
+  "exit_code": 0,
+  "cases": [
+    {
+      "chart_id": "clmw269gh08z",
+      "mark_id": "mkmw269ex88t",
+      "symbol": "RELIANCE",
+      "interval": "daily",
+      "at": 1793557800,
+      "timestamp_ist": "2026-11-02T00:00:00",
+      "expected": "must_match",
+      "actual": "matched",
+      "passed": true,
+      "matched": true,
+      "condition_values": {
+        "data_available": true,
+        "lookback_candle_count": 30,
+        "target_body": 71.90000000000009,
+        "max_body_last_30": 71.90000000000009,
+        "green_candle": true,
+        "body_is_max": true,
+        "all_conditions": true
+      },
+      "matched_rows": [
+        {
+          "stock": "RELIANCE",
+          "scan_date": "2026-11-02",
+          "direction": "BUY",
+          "close": 1300.0,
+          "volume": 88121121,
+          "at": "2026-11-02T00:00:00",
+          "interval": "daily"
+        }
+      ]
+    }
+  ]
+}
