@@ -159,6 +159,15 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "superTrend": row["superTrend"],
     }
     previous_supertrend = row.get("previous_superTrend")
+    volume = row.get("volume")
+    prior_volume_count = row.get("prior_volume_count", 0)
+    max_prior_volume = row.get("max_prior_volume")
+    volume_history_available = (
+        prior_volume_count == 300 and max_prior_volume is not None
+    )
+    volume_above_last_300 = (
+        volume_history_available and volume is not None and volume > max_prior_volume
+    )
     available = (
         high is not None
         and low is not None
@@ -179,10 +188,10 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
         "previous_superTrend_in_range": (
             available and low <= previous_supertrend <= high
         ),
+        "volume_above_last_300": volume_above_last_300,
     }
     short_signal = all(conditions.values())
     open_price = row.get("open")
-    volume = row.get("volume")
     previous_volume = row.get("previous_volume")
     long_available = (
         available
@@ -199,6 +208,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             for indicator in ("sma20", "sma50", "sma200")
         },
         "volume_above_previous": long_available and volume > previous_volume,
+        "volume_above_last_300": conditions["volume_above_last_300"],
         "previous_superTrend_in_range": conditions["previous_superTrend_in_range"],
     }
     long_signal = all(long_conditions.values())
@@ -215,14 +225,19 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
             signal = "SHORT"
     matched = (short_signal and signal == "SHORT") or (long_signal and signal == "LONG")
     measured = {
-        "data_available": available and (short_signal or long_available),
+        "data_available": (
+            available and volume_history_available and (short_signal or long_available)
+        ),
         "long_data_available": long_available,
+        "volume_history_available": volume_history_available,
         "open": open_price,
         "high": high,
         "low": low,
         "close": close,
         "volume": volume,
         "previous_volume": previous_volume,
+        "prior_volume_count": prior_volume_count,
+        "max_prior_volume": max_prior_volume,
         **indicators,
         "previous_superTrend": previous_supertrend,
         **conditions,
@@ -514,12 +529,20 @@ def run_scan(
             previous_values: dict[str, Any] = {}
             if target_symbols:
                 previous_result = client.query(
-                    "SELECT stock, superTrend, volume "
+                    "SELECT stock, "
+                    "tupleElement(argMax(tuple(superTrend), date), 1) "
+                    "AS previous_superTrend, "
+                    "tupleElement(argMax(tuple(volume), date), 1) AS previous_volume, "
+                    "count(volume) AS prior_volume_count, "
+                    "max(volume) AS max_prior_volume "
+                    "FROM ("
+                    "SELECT stock, date, superTrend, volume "
                     "FROM stock__candles_data "
                     "WHERE interval = {interval:String} "
                     "AND stock IN {symbols:Array(String)} "
                     "AND date < toDateTime({target:String}) "
-                    "ORDER BY stock, date DESC LIMIT 1 BY stock",
+                    "ORDER BY stock, date DESC LIMIT 300 BY stock"
+                    ") GROUP BY stock",
                     parameters={
                         "interval": interval,
                         "symbols": target_symbols,
@@ -527,8 +550,19 @@ def run_scan(
                     },
                 )
                 previous_values = {
-                    str(stock): (supertrend, volume)
-                    for stock, supertrend, volume in previous_result.result_rows
+                    str(stock): (
+                        supertrend,
+                        volume,
+                        prior_volume_count,
+                        max_prior_volume,
+                    )
+                    for (
+                        stock,
+                        supertrend,
+                        volume,
+                        prior_volume_count,
+                        max_prior_volume,
+                    ) in previous_result.result_rows
                 }
 
             day_matches = []
@@ -537,8 +571,13 @@ def run_scan(
                 if normalized_date[11:] != FIRST_CANDLE_TIME.strftime("%H:%M:%S"):
                     continue
                 stock = str(raw["stock"])
-                raw["previous_superTrend"], raw["previous_volume"] = (
-                    previous_values.get(stock, (None, None))
+                (
+                    raw["previous_superTrend"],
+                    raw["previous_volume"],
+                    raw["prior_volume_count"],
+                    raw["max_prior_volume"],
+                ) = (
+                    previous_values.get(stock, (None, None, 0, None))
                 )
                 matches, condition_values = _truth(raw)
                 if diagnostics is not None:
@@ -608,7 +647,8 @@ def run_scan(
                         "only the completed 09:15 IST 5-minute candle; "
                         "short: high above and close below SMA20, SMA50, and SMA200; "
                         "long: bullish body opening below and closing above all three "
-                        "SMAs, with volume above the previous candle; "
+                        "SMAs; all signals require volume above each of the 300 previous "
+                        "5-minute candles; "
                         "previous SuperTrend within the candle low-to-high range; "
                         "before liquidity ranking, long requires close strictly above "
                         "all three SMAs and current SuperTrend; short requires close "
