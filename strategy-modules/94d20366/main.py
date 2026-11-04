@@ -1,5 +1,7 @@
 import os
+from bisect import bisect_left, bisect_right
 from datetime import date, datetime, time, timedelta
+from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -36,6 +38,8 @@ COLUMNS = [
     {"key": "scan_date", "label": "Date", "format": "date"},
     {"key": "close", "label": "Last price (LTP)", "format": "price"},
     {"key": "volume", "label": "Volume", "format": "int"},
+    {"key": "liquidity", "label": "Liquidity score", "format": "price"},
+    {"key": "signal_range_pct", "label": "Signal candle range (%)", "format": "price"},
     {"key": "date", "label": "Candle time", "format": "datetime"},
     {"key": "vma20", "label": "Avg volume (20)", "format": "int"},
     {"key": "sma20", "label": "SMA 20", "format": "price"},
@@ -232,7 +236,7 @@ def _truth(row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     return matched, measured
 
 
-def _highest_liquidity(client, matches, trading_day, liquidity_days):
+def _medium_liquidity_and_range(client, matches, trading_day, liquidity_days):
     if len(matches) <= 1:
         return matches
     result = client.query(
@@ -256,7 +260,15 @@ def _highest_liquidity(client, matches, trading_day, liquidity_days):
     )
     scores = {}
     for stock, sessions, avg_volume, volatility in result.result_rows:
-        if sessions != liquidity_days or volatility is None:
+        if (
+            sessions != liquidity_days
+            or avg_volume is None
+            or volatility is None
+            or not isfinite(avg_volume)
+            or not isfinite(volatility)
+            or avg_volume < 0
+            or volatility < 0
+        ):
             raise ScanParameterError(
                 f"Insufficient liquidity history for {stock}: "
                 f"need {liquidity_days} prior trading sessions"
@@ -264,8 +276,35 @@ def _highest_liquidity(client, matches, trading_day, liquidity_days):
         scores[str(stock)] = avg_volume / (1 + volatility)
     if any(row["stock"] not in scores for row in matches):
         raise ScanParameterError("Missing liquidity history for qualifying stocks")
+    for row in matches:
+        row["liquidity"] = scores[row["stock"]]
+    ranked_values = {
+        key: sorted(row[key] for row in matches)
+        for key in ("liquidity", "signal_range_pct")
+    }
+
+    def medium_distance(row):
+        # Tied values share their midpoint percentile; both metrics have equal weight.
+        # The common percentile denominator cancels, keeping distance ties exact.
+        return sum(
+            (
+                bisect_left(values, row[key])
+                + bisect_right(values, row[key])
+                - len(matches)
+            ) ** 2
+            for key, values in ranked_values.items()
+        )
+
     return [
-        max(matches, key=lambda row: (scores[row["stock"]], row["volume"], row["stock"]))
+        max(
+            matches,
+            key=lambda row: (
+                -medium_distance(row),
+                row["liquidity"],
+                row["volume"],
+                row["stock"],
+            ),
+        )
     ]
 
 
@@ -512,6 +551,15 @@ def run_scan(
                         }
                     )
                 if matches:
+                    if not isfinite(raw["close"]) or raw["close"] <= 0:
+                        raise ScanParameterError(
+                            f"Invalid signal candle price for {stock}"
+                        )
+                    signal_range_pct = 100 * (raw["high"] - raw["low"]) / raw["close"]
+                    if not isfinite(signal_range_pct):
+                        raise ScanParameterError(
+                            f"Invalid signal candle range for {stock}"
+                        )
                     day_matches.append(
                         {
                             "stock": str(raw["stock"]),
@@ -520,6 +568,8 @@ def run_scan(
                             "scan_date": normalized_date[:10],
                             "close": raw["close"],
                             "volume": raw["volume"],
+                            "liquidity": None,
+                            "signal_range_pct": signal_range_pct,
                             "date": normalized_date,
                             "vma20": raw["vma20"],
                             "sma20": raw["sma20"],
@@ -529,7 +579,7 @@ def run_scan(
                             "signal": condition_values["signal"],
                         }
                     )
-            day_matches = _highest_liquidity(
+            day_matches = _medium_liquidity_and_range(
                 client, day_matches, trading_day, liquidity_days
             )
             total += len(day_matches)
@@ -563,8 +613,16 @@ def run_scan(
                         "before liquidity ranking, long requires close strictly above "
                         "all three SMAs and current SuperTrend; short requires close "
                         "strictly below all three SMAs and current SuperTrend; "
-                        "highest liquidity at 09:15 IST using "
+                        "medium liquidity and medium signal candle range at 09:15 IST; "
+                        "liquidity = average daily volume / "
+                        "(1 + average daily relative range), using "
                         f"{liquidity_days} prior trading sessions; "
+                        "signal candle range (%) = 100 * (high - low) / close; "
+                        "medium minimizes the sum of squared distances from the 50th "
+                        "percentile of each metric among that date's qualifiers, "
+                        "using midpoint ranks for ties and equal weights; "
+                        "ties prefer higher liquidity, then signal volume, then symbol; "
+                        "a lone qualifier bypasses history ranking (liquidity is null); "
                         "at most one qualifying stock per date; "
                         f"dates {from_date.isoformat()} through {to_date.isoformat()}; "
                         f"as_of {applied_as_of} IST"
