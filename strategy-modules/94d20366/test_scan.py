@@ -205,7 +205,7 @@ class Client:
         self.closed = True
 
 
-def test_range_selects_highest_liquidity_independently_of_signal_volume(monkeypatch):
+def test_range_combines_liquidity_and_range_independently_of_signal_volume(monkeypatch):
     client = Client()
     monkeypatch.setattr(main, "_client", lambda: client)
     metadata = {}
@@ -261,6 +261,8 @@ def test_single_match_skips_liquidity_and_intersects_live_universe(monkeypatch):
         }
     )
     assert [row["stock"] for row in rows] == ["AAA"]
+    assert rows[0]["liquidity"] is None
+    assert rows[0]["signal_range_pct"] == pytest.approx(100 * 30 / 90)
     assert not any("daily_volume" in sql for sql, _ in client.queries)
     assert all(
         params["symbols"] == ["AAA"]
@@ -309,7 +311,7 @@ def test_all_or_empty_universe_skips_membership_query(monkeypatch, universe):
     rows = main.run_scan(
         {"universe": universe, "as_of": "2026-10-30T09:15"},
     )
-    assert [row["stock"] for row in rows] == ["CCC", "CCC"]
+    assert [row["stock"] for row in rows] == ["BBB", "BBB"]
     assert not any("universe_members" in sql for sql, _ in client.queries)
     assert all(
         "symbols" not in parameters
@@ -670,6 +672,149 @@ def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
     assert all(row["signal"] == "SHORT" for row in data["matches"])
     assert all(row["direction"] == "SELL" for row in data["matches"])
     assert "only the completed 09:15 IST" in data["criteria"]
+    assert "medium liquidity and medium signal candle range" in data["criteria"]
+    for row in data["matches"]:
+        assert row["liquidity"] == pytest.approx(1000 / 1.01)
+        assert row["signal_range_pct"] == pytest.approx(100 * 30 / 90)
+        assert all(column["key"] in row for column in data["columns"])
+
+
+@pytest.mark.parametrize(
+    "liquidity,ranges,expected",
+    [
+        ([100, 200, 300], [1, 2, 3], "B"),
+        ([100, 200, 300, 400, 500], [1, 3, 5, 4, 2], "B"),
+        ([100, 200, 300, 400, 500], [2, 2, 2, 2, 2], "C"),
+        ([100, 100, 100, 100, 100], [1, 2, 3, 4, 5], "C"),
+        ([100, 200, 200, 200, 300], [1, 2, 3, 4, 5], "C"),
+        ([100, 200, 300, 400, 500], [3, 1, 5, 4, 2], "D"),
+        ([100, 100, 100], [2, 2, 2], "C"),
+        ([100, 200], [1, 2], "B"),
+        ([100, 200, 300, 400], [4, 3, 2, 1], "C"),
+    ],
+)
+def test_selection_targets_both_medium_metrics(liquidity, ranges, expected):
+    class HistoryClient:
+        def query(self, sql, parameters=None):
+            return SimpleNamespace(
+                result_rows=[
+                    (chr(65 + index), 10, value, 0)
+                    for index, value in enumerate(liquidity)
+                ]
+            )
+
+    matches = [
+        {
+            "stock": chr(65 + index),
+            "volume": 1000,
+            "liquidity": None,
+            "signal_range_pct": value,
+        }
+        for index, value in enumerate(ranges)
+    ]
+    for candidates in (matches, list(reversed(matches))):
+        rows = main._medium_liquidity_and_range(
+            HistoryClient(), candidates, date(2026, 10, 30), 10
+        )
+        assert [row["stock"] for row in rows] == [expected]
+
+
+def test_medium_metric_ties_prefer_signal_volume_before_symbol():
+    class HistoryClient:
+        def query(self, sql, parameters=None):
+            return SimpleNamespace(result_rows=[("AAA", 10, 1000, 0), ("BBB", 10, 1000, 0)])
+
+    matches = [
+        {"stock": "AAA", "volume": 2000, "signal_range_pct": 2},
+        {"stock": "BBB", "volume": 1000, "signal_range_pct": 2},
+    ]
+    assert main._medium_liquidity_and_range(
+        HistoryClient(), matches, date(2026, 10, 30), 10
+    )[0]["stock"] == "AAA"
+
+
+def test_signal_range_is_measured_from_signal_candle_and_normalized(monkeypatch):
+    class RangeClient(Client):
+        def query(self, sql, parameters=None):
+            result = super().query(sql, parameters)
+            if "SELECT stock, date, high" in sql:
+                rows = [list(row) for row in result.result_rows]
+                for row in rows:
+                    row[2], row[3] = {
+                        "AAA": (105.0, 94.0),
+                        "BBB": (110.0, 80.0),
+                        "CCC": (200.0, 10.0),
+                    }[row[0]]
+                    if row[0] == "BBB":
+                        for index in (2, 3, 4, 7, 8, 9, 10, 11):
+                            row[index] *= 10
+                return SimpleNamespace(result_rows=rows)
+            if "SELECT stock, superTrend, volume" in sql:
+                return SimpleNamespace(
+                    result_rows=[
+                        (stock, supertrend * (10 if stock == "BBB" else 1), volume)
+                        for stock, supertrend, volume in result.result_rows
+                    ]
+                )
+            return result
+
+    monkeypatch.setattr(main, "_client", RangeClient)
+    rows = main.run_scan({"universe": "all", "as_of": "2026-10-30T09:15"})
+    assert [row["stock"] for row in rows] == ["BBB", "BBB"]
+    assert all(row["signal_range_pct"] == pytest.approx(100 * 30 / 90) for row in rows)
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        [],
+        [("AAA", 10, None, 0.1), ("BBB", 10, 1000, 0.1)],
+        [("AAA", 10, 1000, float("nan")), ("BBB", 10, 1000, 0.1)],
+        [("AAA", 10, 1000, -1), ("BBB", 10, 1000, 0.1)],
+    ],
+)
+def test_missing_or_invalid_liquidity_cannot_produce_a_medium_winner(monkeypatch, history):
+    class HistoryClient(Client):
+        def query(self, sql, parameters=None):
+            if "daily_volume" in sql:
+                return SimpleNamespace(result_rows=history)
+            return super().query(sql, parameters)
+
+    client = HistoryClient()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    with pytest.raises(main.ScanParameterError, match="liquidity history"):
+        main.run_scan({"as_of": "2026-10-30T09:15"})
+    assert client.closed
+
+
+@pytest.mark.parametrize(
+    "index,value,error",
+    [
+        (4, 0, "Invalid signal candle price"),
+        (4, -1, "Invalid signal candle price"),
+        (2, float("inf"), "Invalid signal candle range"),
+    ],
+)
+def test_invalid_signal_measurements_return_bad_request(monkeypatch, index, value, error):
+    class InvalidCandleClient(Client):
+        def query(self, sql, parameters=None):
+            result = super().query(sql, parameters)
+            if "SELECT stock, date, high" in sql:
+                rows = [list(row) for row in result.result_rows]
+                for row in rows:
+                    row[index] = value
+                return SimpleNamespace(result_rows=rows)
+            return result
+
+    client = InvalidCandleClient()
+    monkeypatch.setattr(main, "_client", lambda: client)
+    with TestClient(main.app) as api:
+        response = api.get(
+            "/strategy-api/94d20366/scan", params={"as_of": "2026-10-30T09:15"}
+        )
+    assert response.status_code == 400
+    assert response.json()["error"].startswith(error)
+    assert client.closed
 
 
 def test_replay_before_opening_returns_no_winner(monkeypatch):
