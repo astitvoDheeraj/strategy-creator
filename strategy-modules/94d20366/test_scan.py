@@ -15,6 +15,8 @@ def candle(**overrides):
         "open": 105.0,
         "volume": 1000,
         "previous_volume": 500,
+        "prior_volume_count": 300,
+        "max_prior_volume": 999,
         "sma20": 100.0,
         "sma50": 101.0,
         "sma200": 102.0,
@@ -47,6 +49,26 @@ def test_long_setup_matches_without_short_conditions():
     assert values["signal"] == "LONG"
     assert all(values["long_conditions"].values())
     assert values["previous_volume"] == 500
+
+
+@pytest.mark.parametrize(
+    "overrides,expected",
+    [
+        ({"volume": 1000, "max_prior_volume": 999}, True),
+        ({"volume": 999, "max_prior_volume": 999}, False),
+        ({"volume": 1000, "max_prior_volume": 1000}, False),
+        ({"volume": 1000, "prior_volume_count": 299}, False),
+        ({"volume": 1000, "max_prior_volume": None}, False),
+    ],
+)
+def test_long_volume_must_exceed_all_300_prior_candles(overrides, expected):
+    matched, values = main._truth(candle(open=90.0, close=110.0, **overrides))
+    assert matched is expected
+    assert values["long_conditions"]["volume_above_last_300"] is expected
+    assert values["volume_history_available"] is (
+        overrides.get("prior_volume_count", 300) == 300
+        and overrides.get("max_prior_volume", 999) is not None
+    )
 
 
 def test_signal_requires_strict_supertrend_and_moving_average_relationships():
@@ -129,7 +151,17 @@ def test_long_setup_rejects_failed_or_missing_conditions(overrides):
 
 
 def test_short_does_not_require_bullish_body_or_volume_growth():
-    assert main._truth(candle(volume=1, previous_volume=None))[0]
+    assert main._truth(
+        candle(volume=1000, previous_volume=None, max_prior_volume=999)
+    )[0]
+
+
+def test_short_volume_must_exceed_all_300_prior_candles():
+    matched, values = main._truth(
+        candle(volume=1000, previous_volume=None, max_prior_volume=1000)
+    )
+    assert not matched
+    assert values["volume_above_last_300"] is False
 
 
 def test_missing_long_history_is_not_a_verified_nonmatch():
@@ -189,8 +221,11 @@ class Client:
                 )
                 and target <= datetime.fromisoformat(parameters["as_of"])
             ]
-        elif "SELECT stock, superTrend, volume" in sql:
-            rows = [(stock, 95.0, 500) for stock in parameters["symbols"]]
+        elif "prior_volume_count" in sql:
+            rows = [
+                (stock, 95.0, 500, 300, 50)
+                for stock in parameters["symbols"]
+            ]
         elif "daily_volume" in sql:
             rows = [
                 ("AAA", self.sessions, 1000.0, 0.5),
@@ -546,9 +581,11 @@ def test_intraday_matches_never_replace_opening_liquidity_winner(monkeypatch):
         assert values["short_signal"]
         assert values["previous_superTrend"] == 95.0
         assert values["previous_volume"] == 500
+        assert values["volume_history_available"] is True
     for sql, params in client.queries:
-        if "SELECT stock, superTrend, volume" in sql:
-            assert "LIMIT 1 BY stock" in sql
+        if "prior_volume_count" in sql:
+            assert "LIMIT 300 BY stock" in sql
+            assert "max(volume) AS max_prior_volume" in sql
             assert params["target"].endswith("09:15:00")
 
 
@@ -672,6 +709,7 @@ def test_api_keeps_date_filter_and_requests_flat_table(monkeypatch):
     assert all(row["signal"] == "SHORT" for row in data["matches"])
     assert all(row["direction"] == "SELL" for row in data["matches"])
     assert "only the completed 09:15 IST" in data["criteria"]
+    assert "volume above each of the 300 previous 5-minute candles" in data["criteria"]
     assert "medium liquidity and medium signal candle range" in data["criteria"]
     for row in data["matches"]:
         assert row["liquidity"] == pytest.approx(1000 / 1.01)
@@ -749,11 +787,15 @@ def test_signal_range_is_measured_from_signal_candle_and_normalized(monkeypatch)
                         for index in (2, 3, 4, 7, 8, 9, 10, 11):
                             row[index] *= 10
                 return SimpleNamespace(result_rows=rows)
-            if "SELECT stock, superTrend, volume" in sql:
+            if "prior_volume_count" in sql:
                 return SimpleNamespace(
                     result_rows=[
-                        (stock, supertrend * (10 if stock == "BBB" else 1), volume)
-                        for stock, supertrend, volume in result.result_rows
+                        (
+                            stock,
+                            supertrend * (10 if stock == "BBB" else 1),
+                            *rest,
+                        )
+                        for stock, supertrend, *rest in result.result_rows
                     ]
                 )
             return result

@@ -36,6 +36,9 @@ def test_truth_matches_confirmed_conditions_without_current_supertrend_filter():
             "sma200": 1608.22,
             "superTrend": 1633.32,
             "previous_superTrend": 1623.36,
+            "volume": 2000,
+            "prior_volume_count": 300,
+            "max_prior_volume": 1000,
         }
     )
 
@@ -56,6 +59,9 @@ def test_truth_rejects_missing_candle_or_previous_supertrend_data():
             "sma200": 1608.22,
             "superTrend": 1633.32,
             "previous_superTrend": None,
+            "volume": 2000,
+            "prior_volume_count": 300,
+            "max_prior_volume": 1000,
         }
     )
 
@@ -76,6 +82,9 @@ def test_truth_includes_previous_supertrend_range_boundaries(previous_supertrend
             "sma200": 1608.22,
             "superTrend": 1633.32,
             "previous_superTrend": previous_supertrend,
+            "volume": 2000,
+            "prior_volume_count": 300,
+            "max_prior_volume": 1000,
         }
     )
 
@@ -95,6 +104,9 @@ def test_truth_rejects_previous_supertrend_outside_candle_range(previous_supertr
             "sma200": 1608.22,
             "superTrend": 1633.32,
             "previous_superTrend": previous_supertrend,
+            "volume": 2000,
+            "prior_volume_count": 300,
+            "max_prior_volume": 1000,
         }
     )
 
