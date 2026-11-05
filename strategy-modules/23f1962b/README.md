@@ -1,0 +1,1 @@
+This daily swing screener computes its indicators directly from up to 260 de-duplicated daily OHLCV candles per universe stock and evaluates IBL/DTL long or PBS/DTS short setups subject to turnover, the NIFTY 50 regime gate, risk bounds, and a 90-day date range; matches are ranked by ADX and exposed through the job-prefixed FastAPI scan endpoint.
