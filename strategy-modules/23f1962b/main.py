@@ -325,6 +325,7 @@ def _signals(
     weekly_bullish: bool,
     weekly_bearish: bool,
     regime: str,
+    long_allowed: bool,
     long_member: bool,
     short_member: bool,
 ) -> list[tuple[str, float]]:
@@ -338,7 +339,9 @@ def _signals(
     yesterday = indicators[index - 1]
     required = ("sma50", "sma200", "rsi14", "atr14", "adx14", "slow_k", "slow_d",
                 "vol_ma20", "turnover20")
-    if any(today[key] is None for key in required) or yesterday["slow_k"] is None:
+    if any(today[key] is None for key in required) or any(
+        yesterday[key] is None for key in ("slow_k", "slow_d")
+    ):
         return []
     if today["turnover20"] < 10_000_000:
         return []
@@ -347,7 +350,6 @@ def _signals(
     previous_low = float(previous["low"])
     uptrend = close > today["sma200"] and today["sma50"] > today["sma200"]
     downtrend = close < today["sma200"] and today["sma50"] < today["sma200"]
-    long_allowed = regime != "bear" and regime != "missing"
     short_allowed = regime != "bull" and regime != "missing"
     families: list[tuple[str, float]] = []
 
@@ -507,11 +509,16 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
         requested_symbols = [item.strip() for item in requested_symbols.split(",") if item.strip()]
     if requested_symbols is not None and not requested_symbols:
         raise ScanParameterError("symbols must contain at least one symbol")
+    if from_date is not None and to_date is not None:
+        if from_date > to_date:
+            raise ScanParameterError("from_date must be on or before to_date")
+        if (to_date - from_date).days + 1 > MAX_DAYS:
+            raise ScanParameterError("date range must not exceed 90 calendar days")
 
     client = _client()
     try:
         universe_result = client.query(
-            "SELECT DISTINCT symbol FROM universe_members FINAL "
+            "SELECT DISTINCT symbol, universe_id FROM universe_members FINAL "
             "WHERE universe_id IN {universes:Array(String)} AND active = 1",
             parameters={"universes": list(UNIVERSES)},
         )
@@ -580,11 +587,15 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
             candle_data = _fetch_candles(client, sorted(universe_symbols), scan_day)
             benchmark = _fetch_candles(client, ["NIFTY 50"], scan_day).get("NIFTY 50", [])
             benchmark_regime = "missing"
-            if len(benchmark) >= HISTORY_CANDLES and benchmark[-1]["day"] == scan_day:
+            long_gate_allowed = False
+            if len(benchmark) >= 50 and benchmark[-1]["day"] == scan_day:
                 benchmark_indicators = _indicators(benchmark)
                 latest_benchmark = benchmark_indicators[-1]
                 close = benchmark[-1]["close"]
                 if latest_benchmark["sma50"] is not None and latest_benchmark["ema20"] is not None:
+                    long_gate_allowed = (
+                        close > latest_benchmark["ema20"]
+                    )
                     if close > latest_benchmark["sma50"] and close > latest_benchmark["ema20"]:
                         benchmark_regime = "bull"
                     elif close < latest_benchmark["sma50"] and close < latest_benchmark["ema20"]:
@@ -605,6 +616,7 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
                     weekly_bullish,
                     weekly_bearish,
                     benchmark_regime,
+                    long_gate_allowed,
                     stock in long_symbols,
                     stock in short_symbols,
                 )
@@ -631,6 +643,7 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
                         "target_price": target,
                         "risk_pct": round(risk_pct, 2),
                         "adx": round(float(adx), 2),
+                        "_rank": float(adx),
                         "strength": "normal",
                         "regime": benchmark_regime,
                     }
@@ -639,7 +652,9 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
             strength_count = ceil(len(day_rows) / 3)
             strong_stocks = {
                 row["stock"]
-                for row in sorted(day_rows, key=lambda item: (-item["adx"], item["stock"]))[:strength_count]
+                for row in sorted(
+                    day_rows, key=lambda item: (-item["_rank"], item["stock"])
+                )[:strength_count]
             }
             for row in day_rows:
                 row["strength"] = "strong" if row["stock"] in strong_stocks else "normal"
@@ -651,14 +666,18 @@ def run_scan(params: dict[str, Any], metadata: dict[str, Any] | None = None) -> 
                 day_rows = [row for row in day_rows if row["strength"] == "strong"]
             day_rows.sort(
                 key=lambda row: (
-                    -_sort_value(row, applied["sort_by"])
-                    if applied["sort_dir"] == "desc"
+                    row["_rank"]
+                    if applied["sort_by"] == "adx"
                     else _sort_value(row, applied["sort_by"]),
                     row["stock"],
-                )
+                ),
+                reverse=applied["sort_dir"] == "desc",
             )
             total += len(day_rows)
-            all_rows.extend(day_rows if applied["limit"] == 0 else day_rows[: applied["limit"]])
+            visible_rows = day_rows if applied["limit"] == 0 else day_rows[: applied["limit"]]
+            for row in visible_rows:
+                row.pop("_rank")
+            all_rows.extend(visible_rows)
 
         if metadata is not None:
             metadata.update(
