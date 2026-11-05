@@ -1,0 +1,107 @@
+{
+  "setup_id": "823e0849",
+  "screener_job_id": "777a9e34",
+  "screener_title": "Biggest Green Candle Finder",
+  "screener_params": {
+    "universe": "nifty_200"
+  },
+  "interval": "DAILY",
+  "universe": {
+    "mode": "inherit",
+    "stocks": [],
+    "index": ""
+  },
+  "scope": {
+    "mode": "all",
+    "n": 0,
+    "column": "",
+    "direction": "desc"
+  },
+  "run_window": {
+    "start_date": "",
+    "end_date": "",
+    "time_start": "",
+    "time_end": "",
+    "skip_first_minutes": 0,
+    "square_off_time": "",
+    "weekdays": []
+  },
+  "dedupe_policy": "once_per_day",
+  "alert": {
+    "template": "New stock alert: {stock} at {time} on {date} - {screener}.",
+    "channels": [
+      "inapp"
+    ],
+    "include_columns": []
+  },
+  "trade_legs": true,
+  "holding_period": {
+    "mode": "multi_day",
+    "max_days": 60,
+    "intraday_close_time": "15:15"
+  },
+  "legs": {
+    "side": "long",
+    "entry": {
+      "kind": "market",
+      "pullback_pct": 0.05,
+      "timeout_candles": 1
+    },
+    "sl": {
+      "kind": "range",
+      "value": 1.0
+    },
+    "targets": [],
+    "trailing": {
+      "kind": "none",
+      "value": 0.0
+    },
+    "time_exit_minutes": 0,
+    "exit_on_drop": false,
+    "exit_on_opposite": false,
+    "ref_candle": "signal",
+    "single_leg": true,
+    "remainder": "hold",
+    "breakeven_after_first_target": false,
+    "adds": {
+      "enabled": false,
+      "kind": "range",
+      "step": 0.5,
+      "max_adds": 3,
+      "qty_mult": 1.0
+    },
+    "nifty_filter": "off"
+  },
+  "sizing": {
+    "capital": 1000000.0,
+    "per_position_cap": 25000.0,
+    "max_positions": 3,
+    "product": "CNC",
+    "slippage_pct": 0.05,
+    "risk_pct": 0.0
+  },
+  "guardrails": {
+    "max_alerts_per_day": 60,
+    "max_daily_loss": 0.0,
+    "max_trades_per_day": 10,
+    "cooldown_minutes": 30,
+    "max_per_sector": 0
+  },
+  "entry_style": "",
+  "exit_rules": "",
+  "notes": "",
+  "custom_instructions": "",
+  "data_wait": {
+    "max_wait_sec": 600
+  },
+  "direction": {
+    "mode": "screener",
+    "column": "direction"
+  },
+  "dynamic_params": false,
+  "context": {
+    "candles": 20
+  },
+  "assumed_defaults": [],
+  "mode": "alert"
+}
