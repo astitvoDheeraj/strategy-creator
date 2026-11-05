@@ -1,6 +1,8 @@
 """Focused tests for setup 823e0849."""
 
+import json
 from copy import deepcopy
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -35,6 +37,13 @@ def _payload(new=("AAA",)):
             "still": [],
             "dropped": [],
         },
+        "candles": {
+            stock: [
+                {"date": "2026-10-27", "open": 100, "close": 99},
+                {"date": "2026-10-28", "open": 98, "close": 120},
+            ]
+            for stock in new
+        },
         "positions": [],
     }
 
@@ -68,6 +77,21 @@ def test_fixed_configuration():
     assert SPEC["sizing"]["max_positions"] == 3
     assert SPEC["sizing"]["product"] == "CNC"
     assert SPEC["data_wait"] == {"max_wait_sec": 600}
+    assert SPEC["custom_instructions"] == (
+        "FIRST CHECK SHOULD BE BULLISH ENGULFING CANDLE PATTERN, OUT OF ALL "
+        "BULLISH ENGULFING FOUND FOR THE DAY , THE BIGGEST ONE WILL BE PICKED"
+    )
+
+
+def test_recorded_specification_preserves_refinement_summary_and_changes():
+    manifest = json.loads(Path(__file__).with_name("manifest.json").read_text())
+    assert manifest["setup_id"] == SPEC["setup_id"]
+    assert manifest["screener_job_id"] == SPEC["screener_job_id"]
+    prompt = manifest["prompt"]
+    assert "## Refinement Summary" in prompt
+    assert "**Changed:**" in prompt
+    assert "largest green candle body" in prompt
+    assert SPEC["custom_instructions"] in prompt
 
 
 def test_new_buy_signal_alert_and_entry():
@@ -106,6 +130,25 @@ def test_only_new_signals_are_processed_and_duplicate_stock_is_not_repeated():
     payload["signals"]["still"] = [{"stock": "BBB", "row": {"Direction": "BUY"}}]
     result = client.post("/evaluate", json=payload).json()
     assert [action["stock"] for action in result["actions"]] == ["AAA", "AAA"]
+
+
+def test_only_largest_bullish_engulfing_new_signal_is_alerted_and_entered():
+    payload = _payload(("AAA", "BBB"))
+    payload["candles"]["BBB"][-1].update(open=95, close=130)
+    actions = client.post("/evaluate", json=payload).json()["actions"]
+    assert [action["stock"] for action in actions] == ["BBB", "BBB"]
+
+
+def test_non_engulfing_match_is_not_alerted_or_entered():
+    payload = _payload()
+    payload["candles"]["AAA"][-1].update(open=100, close=120)
+    assert client.post("/evaluate", json=payload).json()["actions"] == []
+
+
+def test_missing_candle_history_does_not_pass_pattern_check():
+    payload = _payload()
+    payload["candles"] = {}
+    assert client.post("/evaluate", json=payload).json()["actions"] == []
 
 
 def test_runtime_position_cap_and_existing_positions():
