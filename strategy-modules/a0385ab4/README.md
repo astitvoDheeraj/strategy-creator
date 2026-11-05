@@ -1,0 +1,1 @@
+This module scans daily candles from the selected universe and marks a BUY when the candle low is the lowest of the configured trailing 40 sessions, the close is above the open, and the close is at least 2% above the low. Results are returned by trading date with SuperTrend and 20-session average volume.
