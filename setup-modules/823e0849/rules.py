@@ -43,6 +43,75 @@ def _side(row: dict) -> str:
     return {"BUY": "long", "SELL": "short"}.get(direction, "")
 
 
+def _date_key(value) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(
+                value.replace("Z", "+00:00")
+            ).date().isoformat()
+        except ValueError:
+            return ""
+    return ""
+
+
+def _price(candle: dict, key: str):
+    value = candle.get(key, candle.get(key.capitalize()))
+    try:
+        price = float(value)
+        return price if math.isfinite(price) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _engulfing_body(row: dict, signal: dict, run: dict, candles_by_stock: dict):
+    signal_date = _date_key(
+        _value(row, "date", "Date") or signal.get("date") or run.get("candle_ts")
+    )
+    stock = signal.get("stock") or _value(row, "stock", "Symbol")
+    stock_key = str(stock)
+    candles = (
+        candles_by_stock.get(stock_key)
+        or candles_by_stock.get(stock_key.upper())
+        or []
+    )
+    if not signal_date or not isinstance(candles, list):
+        return None
+
+    current = None
+    previous = {}
+    for candle in candles:
+        if not isinstance(candle, dict):
+            continue
+        candle_date = _date_key(
+            candle.get("date", candle.get("Date", candle.get("timestamp")))
+        )
+        if candle_date == signal_date:
+            current = candle
+        elif candle_date and candle_date < signal_date and candle_date not in previous:
+            previous[candle_date] = candle
+
+    if current is None:
+        current = row
+    prior = previous[max(previous)] if previous else None
+    if prior is None:
+        return None
+
+    current_open, current_close = _price(current, "open"), _price(current, "close")
+    prior_open, prior_close = _price(prior, "open"), _price(prior, "close")
+    if None in (current_open, current_close, prior_open, prior_close):
+        return None
+    if (
+        prior_close < prior_open
+        and current_close > current_open
+        and current_open <= prior_close
+        and current_close >= prior_open
+    ):
+        return current_close - current_open
+    return None
+
+
 def evaluate(payload: dict) -> dict:
     setup = payload.get("setup") or {}
     spec = {**SPEC, **(setup.get("spec") or {})}
@@ -62,6 +131,9 @@ def evaluate(payload: dict) -> dict:
     neutral = []
     seen = set()
     signals = payload.get("signals") or {}
+    candle_data = payload.get("candles") or {}
+    candles_by_stock = candle_data if isinstance(candle_data, dict) else {}
+    candidates = []
     for signal in signals.get("new") or []:
         if not isinstance(signal, dict):
             continue
@@ -72,6 +144,12 @@ def evaluate(payload: dict) -> dict:
         if not stock or str(stock).upper() in seen:
             continue
         seen.add(str(stock).upper())
+        body = _engulfing_body(row, signal, run, candles_by_stock)
+        if body is not None:
+            candidates.append((body, signal, row, stock))
+
+    selected = [max(candidates, key=lambda candidate: candidate[0])] if candidates else []
+    for _, signal, row, stock in selected:
         side = _side(row)
         time, date = _date_time(row, run)
         actions.append(
