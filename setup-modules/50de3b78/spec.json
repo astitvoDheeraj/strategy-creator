@@ -1,0 +1,117 @@
+{
+  "setup_id": "50de3b78",
+  "screener_job_id": "23f1962b",
+  "screener_title": "Dual Momentum Swing",
+  "screener_params": {
+    "side": "both",
+    "strength_filter": "all",
+    "max_risk_pct": "2",
+    "limit": "10"
+  },
+  "interval": "DAILY",
+  "universe": {
+    "mode": "inherit",
+    "stocks": [],
+    "index": ""
+  },
+  "scope": {
+    "mode": "top_n",
+    "n": 1,
+    "column": "adx",
+    "direction": "desc"
+  },
+  "run_window": {
+    "start_date": "",
+    "end_date": "",
+    "time_start": "",
+    "time_end": "",
+    "skip_first_minutes": 0,
+    "square_off_time": "",
+    "weekdays": []
+  },
+  "dedupe_policy": "once_per_day",
+  "alert": {
+    "template": "{symbol} - {direction} - {reason}",
+    "channels": [
+      "inapp",
+      "email"
+    ],
+    "include_columns": []
+  },
+  "trade_legs": true,
+  "holding_period": {
+    "mode": "multi_day",
+    "max_days": 10,
+    "intraday_close_time": "15:15"
+  },
+  "legs": {
+    "side": "long",
+    "entry": {
+      "kind": "market",
+      "pullback_pct": 0.5,
+      "timeout_candles": 1
+    },
+    "sl": {
+      "kind": "pct",
+      "value": 2.5
+    },
+    "targets": [
+      {
+        "kind": "pct",
+        "value": 2.5,
+        "qty_pct": 100.0
+      }
+    ],
+    "trailing": {
+      "kind": "none",
+      "value": 0.0
+    },
+    "time_exit_minutes": 0,
+    "exit_on_drop": false,
+    "exit_on_opposite": false,
+    "ref_candle": "signal",
+    "single_leg": true,
+    "remainder": "last_target",
+    "breakeven_after_first_target": false,
+    "adds": {
+      "enabled": false,
+      "kind": "range",
+      "step": 0.5,
+      "max_adds": 0,
+      "qty_mult": 1.0
+    },
+    "nifty_filter": "off"
+  },
+  "sizing": {
+    "capital": 2000000.0,
+    "per_position_cap": 2000000.0,
+    "max_positions": 1,
+    "product": "CNC",
+    "slippage_pct": 0.05,
+    "risk_pct": 0.0
+  },
+  "guardrails": {
+    "max_alerts_per_day": 20,
+    "max_daily_loss": 60000.0,
+    "max_trades_per_day": 1,
+    "cooldown_minutes": 0,
+    "max_per_sector": 0
+  },
+  "entry_style": "",
+  "exit_rules": "Exit after 5 sessions at close if unrealized PnL is <= 0; always exit after 10 sessions.",
+  "notes": "",
+  "custom_instructions": "Stop-loss and target MUST come from the signal row's stop_price / target_price columns when valid (fallback 2.5% only when missing). One open position at a time; when a position is open skip new signals entirely and alert the skip. When flat, pick only the highest-adx signal of the day. Exit at session close if 5 sessions elapse with unrealized PnL <= 0 (stall exit), and always close after 10 sessions.",
+  "data_wait": {
+    "max_wait_sec": 150
+  },
+  "direction": {
+    "mode": "screener",
+    "column": "direction"
+  },
+  "dynamic_params": false,
+  "context": {
+    "candles": 20
+  },
+  "assumed_defaults": [],
+  "mode": "alert"
+}
